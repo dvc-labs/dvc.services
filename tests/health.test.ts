@@ -1,0 +1,31 @@
+import assert from 'node:assert/strict';
+import { once } from 'node:events';
+import test from 'node:test';
+import { createHealthServer } from '../src/health.js';
+
+test('health endpoints separate process liveness from Discord readiness and expose no config', async t => {
+  let ready = false;
+  const server = createHealthServer(() => ready);
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const address = server.address();
+  assert.ok(address && typeof address !== 'string');
+  const base = `http://127.0.0.1:${address.port}`;
+  assert.equal((await fetch(`${base}/healthz`)).status, 200);
+  const unavailable = await fetch(`${base}/readyz`);
+  assert.equal(unavailable.status, 503);
+  assert.deepEqual(await unavailable.json(), { status: 'not_ready' });
+  ready = true;
+  const response = await fetch(`${base}/readyz?ignored=secret`);
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get('cache-control'), 'no-store');
+  assert.equal(response.headers.get('x-content-type-options'), 'nosniff');
+  assert.deepEqual(await response.json(), { status: 'ok' });
+  assert.equal((await fetch(`${base}/`)).status, 404);
+  assert.equal((await fetch(`${base}/http://attacker.invalid`)).status, 404);
+  assert.equal((await fetch(`${base}/readyz`, { method: 'POST', body: 'data' })).status, 405);
+  const head = await fetch(`${base}/readyz`, { method: 'HEAD' });
+  assert.equal(head.status, 200);
+  assert.equal(await head.text(), '');
+});

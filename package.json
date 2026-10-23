@@ -1,0 +1,29 @@
+{
+  "name": "dvc.services",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Verification and server utilities for the dvc.labs Discord community.",
+  "type": "module",
+  "license": "MIT",
+  "author": "dvc.labs",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dvc-labs/dvc.services.git"
+  },
+  "engines": { "node": ">=24.17.0 <25" },
+  "scripts": {
+    "dev": "node --env-file-if-exists=.env --import tsx src/index.ts",
+    "build": "tsc -p tsconfig.build.json",
+    "start": "node --max-old-space-size=256 --env-file-if-exists=.env dist/index.js",
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test tests/*.test.ts",
+    "check": "npm run typecheck && npm test && npm run build",
+    "healthcheck": "node dist/healthcheck.js"
+  },
+  "dependencies": { "discord.js": "14.27.0" },
+  "devDependencies": {
+    "@types/node": "24.19.2",
+    "tsx": "4.23.15",
+    "typescript": "6.0.3"
+  }
+}
