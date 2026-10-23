@@ -1,10 +1,47 @@
 import assert from 'node:assert/strict';
 import { mock } from 'node:test';
 import test from 'node:test';
-import { AuditLog, type AuditEvent } from '../src/audit.js';
+import type { EmbedBuilder, TextChannel } from 'discord.js';
+import { AuditLog, discordAuditSink, type AuditEvent } from '../src/audit.js';
 import { Logger } from '../src/logger.js';
 
 const event: AuditEvent = { event: 'verification_succeeded', title: 'Member verified', outcome: 'awarded' };
+
+test('Discord verification logs resolve member, channel, and role references without enabling pings', async () => {
+  const sent: { embeds: EmbedBuilder[]; allowedMentions: { parse: string[] } }[] = [];
+  const channel = { send: async (payload: typeof sent[number]) => { sent.push(payload); } } as unknown as TextChannel;
+  await discordAuditSink(channel)({
+    ...event, userId: '111111111111111111', channelId: '222222222222222222', roleId: '333333333333333333',
+  });
+  assert.equal(sent.length, 1);
+  assert.deepEqual(sent[0]!.embeds[0]!.toJSON().fields, [
+    { name: 'Result', value: 'awarded' },
+    { name: 'Member', value: '<@111111111111111111>' },
+    { name: 'Channel', value: '<#222222222222222222>' },
+    { name: 'Role', value: '<@&333333333333333333>' },
+  ]);
+  assert.deepEqual(sent[0]!.allowedMentions, { parse: [] });
+});
+
+test('Discord lifecycle logs omit references that are not part of the event', async () => {
+  const sent: { embeds: EmbedBuilder[] }[] = [];
+  const channel = { send: async (payload: typeof sent[number]) => { sent.push(payload); } } as unknown as TextChannel;
+  await discordAuditSink(channel)({ event: 'bot_online', title: 'Bot online', outcome: 'ready' });
+  assert.deepEqual(sent[0]!.embeds[0]!.toJSON().fields, [{ name: 'Result', value: 'ready' }]);
+});
+
+test('console audit records keep exact IDs for diagnostics', () => {
+  const output = mock.method(console, 'log', () => {});
+  try {
+    new AuditLog(new Logger('info', '')).record({
+      ...event, userId: '111111111111111111', channelId: '222222222222222222', roleId: '333333333333333333',
+    });
+    const record = JSON.parse(output.mock.calls[0]!.arguments[0] as string);
+    assert.equal(record.userId, '111111111111111111');
+    assert.equal(record.channelId, '222222222222222222');
+    assert.equal(record.roleId, '333333333333333333');
+  } finally { output.mock.restore(); }
+});
 
 test('Discord log failures are isolated and later events still drain', async () => {
   const audit = new AuditLog(new Logger('error', ''));

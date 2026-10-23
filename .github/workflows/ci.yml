@@ -40,5 +40,5 @@ jobs:
       - name: Check production image
         run: |
           test "$(docker run --rm --entrypoint id dvc-services:ci -u)" != "0"
-          docker run --rm --entrypoint node dvc-services:ci --input-type=module -e "import { VERSION } from './dist/version.js'; import 'discord.js'; if (VERSION !== '0.1.0') process.exit(1);"
+          docker run --rm --entrypoint node dvc-services:ci --input-type=module -e "import { VERSION } from './dist/version.js'; import 'discord.js'; if (VERSION !== '0.1.1') process.exit(1);"
           docker run --rm --entrypoint node dvc-services:ci --input-type=module -e "import { existsSync } from 'node:fs'; if (existsSync('.env') || existsSync('node_modules/typescript')) process.exit(1);"

@@ -32,12 +32,11 @@ export function aboutEmbed(config: Config, uptimeSeconds: number): EmbedBuilder 
   const minutes = Math.floor((uptimeSeconds % 3_600) / 60);
   return embed('dvc.services',
     'The service bot for **dvc.labs** — the home for dvc. projects, experiments, and server updates.\n\n'
-    + 'This first release handles member verification and keeps the team informed through activity logs. '
-    + 'More server tools, including OptiPlex monitoring integrations, are planned.')
+    + 'It handles member verification and keeps the team informed through activity logs.')
     .addFields(
       { name: 'Version', value: `v${VERSION}`, inline: true },
       { name: 'Online for', value: `${hours}h ${minutes}m`, inline: true },
-      { name: 'Hosted by', value: '[loon.host](https://loon.host/)', inline: true },
+      { name: 'Maintained by', value: 'dvc.labs', inline: true },
       { name: 'Commands', value: `Use commands in <#${config.commandsChannelId}>.` },
       { name: 'Links', value: `[dvc.](${WEBSITE_URL}) · [Source code](${REPOSITORY_URL})` },
     );

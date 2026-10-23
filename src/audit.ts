@@ -1,4 +1,4 @@
-import type { TextChannel } from 'discord.js';
+import { channelMention, roleMention, userMention, type TextChannel } from 'discord.js';
 import { errorSummary, type Logger } from './logger.js';
 import { embed } from './ui.js';
 
@@ -18,10 +18,10 @@ export type AuditSink = (event: AuditEvent) => Promise<void>;
 export function discordAuditSink(channel: TextChannel): AuditSink {
   return async event => {
     const fields = [{ name: 'Result', value: event.outcome }];
-    if (event.userId) fields.push({ name: 'Member ID', value: event.userId });
-    if (event.channelId) fields.push({ name: 'Channel ID', value: event.channelId });
+    if (event.userId) fields.push({ name: 'Member', value: userMention(event.userId) });
+    if (event.channelId) fields.push({ name: 'Channel', value: channelMention(event.channelId) });
     if (event.command) fields.push({ name: 'Command', value: `/${event.command}` });
-    if (event.roleId) fields.push({ name: 'Role ID', value: event.roleId });
+    if (event.roleId) fields.push({ name: 'Role', value: roleMention(event.roleId) });
     await channel.send({
       embeds: [embed(event.title, event.detail).addFields(fields).setTimestamp()],
       allowedMentions: { parse: [] },
