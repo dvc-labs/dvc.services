@@ -33,6 +33,8 @@ const elevatedPermissions = [
   PermissionFlagsBits.ManageEvents,
   PermissionFlagsBits.ManageGuildExpressions,
   PermissionFlagsBits.ManageMessages,
+  PermissionFlagsBits.PinMessages,
+  PermissionFlagsBits.BypassSlowmode,
   PermissionFlagsBits.ManageThreads,
   PermissionFlagsBits.KickMembers,
   PermissionFlagsBits.BanMembers,

@@ -62,6 +62,20 @@ test('verification never awards an integration, everyone, or staff role', () => 
   }
 });
 
+for (const name of ['PinMessages', 'BypassSlowmode'] as const) {
+  test(`verification rejects ${name} without ManageMessages`, () => {
+    const permissions = new PermissionsBitField([
+      PermissionFlagsBits.ViewChannel,
+      PermissionFlagsBits.SendMessages,
+      PermissionFlagsBits[name],
+    ]);
+    assert.equal(permissions.has(PermissionFlagsBits.ManageMessages), false);
+    assert.throws(() => assertSafeVerificationRole({
+      id: 'members', managed: false, permissions,
+    }, 'guild'), { name: 'SetupError', message: /administrative or moderation permissions/ });
+  });
+}
+
 test('cooldowns are per member and expire', () => {
   let now = 1;
   const cooldown = new Cooldown(5_000, () => now);
