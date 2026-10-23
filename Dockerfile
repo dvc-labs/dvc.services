@@ -1,4 +1,4 @@
-FROM node:24-bookworm-slim AS build
+FROM node:25-bookworm-slim AS build
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --ignore-scripts --no-audit --no-fund
@@ -6,12 +6,12 @@ COPY tsconfig.json tsconfig.build.json ./
 COPY src ./src
 RUN npm run build
 
-FROM node:24-bookworm-slim AS production-dependencies
+FROM node:25-bookworm-slim AS production-dependencies
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund && npm cache clean --force
 
-FROM node:24-bookworm-slim AS runtime
+FROM node:25-bookworm-slim AS runtime
 ENV NODE_ENV=production \
     TZ=Europe/Brussels \
     PORT=8080 \
