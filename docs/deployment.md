@@ -2,7 +2,7 @@
 
 dvc.services is designed for a small, always-on Discord-bot service: one process, one guild, no database, and no required persistent disk. The target plan is **512 MB RAM / 5 GB SSD**. The Docker image caps Node's JavaScript heap at 256 MB and includes production dependencies only; total RAM usage still includes Node and native overhead.
 
-[Loon's bot-hosting page](https://loon.host/discord-bot-hosting) advertises Git-based deployment, runtime secrets, automatic restarts, and a 0.5 GB / 5 GB Hobby tier. Its detailed guides require a portal login. The settings below describe what this project requires; dashboard labels and whether your plan accepts a custom Dockerfile must be confirmed in the actual service panel.
+[Loon's bot-hosting page](https://loon.host/discord-bot-hosting) advertises Git-based deployment, runtime secrets, automatic restarts, and a 0.5 GB / 5 GB Hobby tier. Its detailed guides require a portal login. The observed **Docker image**, **Additional Node packages**, and **Main file** fields match a managed Node runtime; use **Option B** for that panel. Option A applies only if your service separately supports building a repository Dockerfile.
 
 ## Before deploying
 
@@ -39,29 +39,49 @@ Do not enable a public web proxy just to make this bot work. If the panel requir
 
 ## Option B: managed Node.js service
 
-If the panel offers a Node runtime rather than a Dockerfile build:
+For the Loon startup fields **Docker image**, **Additional Node packages (`NODE_PACKAGES`)**, and **Main file (`MAIN_FILE`)**, use:
 
-1. Select **Node.js 24.x**, at least **24.17.0**.
-2. Connect the repository and set the runtime environment variables.
-3. Build/install with:
+| Field | Value |
+| --- | --- |
+| Docker image | **Node.js 24**, at least **24.17.0**; `ghcr.io/parkervcp/yolks:nodejs_24` |
+| Additional Node packages / `NODE_PACKAGES` | Leave empty; use the project's `package.json` and lockfile |
+| Main file / `MAIN_FILE` | `dist/index.js` |
+| Runtime environment | Required Discord variables, plus `NODE_OPTIONS=--max-old-space-size=256` |
 
-   ```bash
-   npm ci --include=dev --ignore-scripts
-   npm run build
-   npm prune --omit=dev --ignore-scripts
-   ```
+The upstream image also publishes `ghcr.io/pelican-eggs/yolks:nodejs_24`. Select the host-approved Node.js 24 option; if the dropdown offers only Node.js 21, ask Loon to enable the Node.js 24 image. Save the selection and restart for it to take effect. Node.js 21 is end-of-life and does not meet this project's runtime requirement. The panel's Minecraft/Java help text does not apply to this bot.
 
-4. Set the start command to:
+`MAIN_FILE` is a file path, so do not enter `npm start` there. `index.ts` is not the project's entrypoint, and pointing the field at `src/index.ts` bypasses the supported TypeScript compilation workflow. Run the compiled JavaScript instead. Likewise, do not add `discord.js` separately to `NODE_PACKAGES`; it is already pinned in `package.json` and the lockfile.
 
-   ```bash
-   npm start
-   ```
+### Build before starting
 
-5. Enable automatic restarts and keep the instance count at one.
+**A fresh Git checkout has no `dist/index.js`: `dist/` is deliberately ignored.** The managed runtime image does not build the repository Dockerfile, and selecting a main file does not compile the project.
 
-Compilation needs TypeScript, so do not omit development dependencies until **after** the build. These are build-time commands, not a command to rerun on every process restart. If your panel has only one startup field, configure its build/install hook if available, or ask Loon which Node deployment workflow it supports.
+If your service has a build hook or an actual shell, run these commands in the project root before the first start and after each source update:
 
-If building within the plan's 512 MB limit fails, build on your development machine or a separate build runner. Upload the resulting `dist/`, `package.json`, and `package-lock.json`, then run `npm ci --omit=dev --ignore-scripts` on the Linux host and use `npm start`. Do not upload your Mac's `node_modules` or token file. Keep the build from the same reviewed commit as the package files.
+```bash
+npm ci --include=dev --ignore-scripts
+npm run build
+npm prune --omit=dev --ignore-scripts
+```
+
+Compilation needs TypeScript, so do not omit development dependencies until **after** the build. Keep these commands in the build/install hook; `MAIN_FILE` remains `dist/index.js`. A bot's input console is not necessarily a shell and may not accept npm commands.
+
+If only the three startup fields are available, or compilation exceeds the hosting plan's memory budget, build on a development machine or separate runner with Node.js 24:
+
+```bash
+npm ci --include=dev --ignore-scripts
+npm run build
+```
+
+Upload the complete resulting **`dist/` folder**, **`package.json`**, **`package-lock.json`**, and **`LICENSE`** into the service's file root using its file manager or SFTP. The root must contain `package.json` alongside `dist/`; do not leave another project folder wrapped around them. Use files from the same reviewed commit. Do not upload your Mac's `node_modules` or token file.
+
+The standard generic Node template installs dependencies from `package.json` during startup. If Loon's template does not, have its install hook or host support run `npm ci --omit=dev --ignore-scripts` in the uploaded project root. An empty `NODE_PACKAGES` field does not replace that dependency-install step. Then start the service with `MAIN_FILE=dist/index.js` and the runtime variables set.
+
+If the host instead offers a full start-command field, `npm start` remains supported after the same build/install steps. It sets the heap limit itself and loads `.env` if present. The direct main-file path uses host-supplied environment variables, so explicitly set `NODE_OPTIONS=--max-old-space-size=256` there.
+
+Keep one instance running and configure automatic restarts. For Git auto-updates, ensure the build hook reruns on each deployed commit. Without a build hook, disable automatic source pulls and upload a fresh matching build on each update so stale JavaScript is never started with newer source/package files.
+
+References: [Node.js release status](https://nodejs.org/en/about/previous-releases), [upstream Node.js 24 runtime](https://github.com/pelican-eggs/yolks/blob/master/nodejs/24/Dockerfile), [published image tags and legacy alias](https://github.com/pelican-eggs/yolks/blob/master/.github/workflows/nodejs.yml), and [standard generic Node template](https://eggs.pterodactyl.io/egg/generic-node-js-generic/). Loon may customize the template's dependency-install/startup commands.
 
 ## Environment block
 
@@ -79,6 +99,7 @@ LOGS_CHANNEL_ID=1562628586584932454
 VERIFICATION_MESSAGE_ID=
 NODE_ENV=production
 TZ=Europe/Brussels
+NODE_OPTIONS=--max-old-space-size=256
 PORT=8080
 LOG_LEVEL=info
 ```

@@ -60,6 +60,7 @@ Copy [`.env.example`](.env.example) for local or Docker Compose use. On loon.hos
 | `LOG_LEVEL` | No | `info` | `debug`, `info`, `warn`, or `error`; filters console output only |
 | `NODE_ENV` | No | `production` in Docker | Standard Node environment; does not select another bot/server |
 | `TZ` | No | `Europe/Brussels` in Docker | Process timezone; structured log timestamps remain UTC |
+| `NODE_OPTIONS` | No | `--max-old-space-size=256` in Docker | Set the same value for a managed panel that runs the main file directly |
 
 The seven Discord variables must be supplied at runtime; the IDs above are prefilled in the example, not hard-coded into the bot. No client secret, public key, OAuth redirect URI, webhook URL, privileged intent, database, or persistent volume is needed. The brand colour is defined in source.
 
@@ -105,6 +106,8 @@ The Compose example caps runtime memory at **512 MB**, drops Linux capabilities,
 There is no public web page. `/healthz` reports process liveness and `/readyz` returns HTTP 200 only after setup is complete and the Discord client is ready. Both return a fixed status object without secrets or server/member details. Docker's healthcheck uses `/readyz`; publishing a port to the internet is unnecessary. An unhealthy Docker status alone does not restart a container; configure host supervision as appropriate.
 
 See [deployment instructions](docs/deployment.md) for Dockerfile settings, managed Node hosting, updates, and troubleshooting.
+
+For Loon's **Docker image / NODE_PACKAGES / MAIN_FILE** panel, select a **Node.js 24** runtime, leave additional packages empty, and set **`MAIN_FILE=dist/index.js`** after compiling the project. A Git checkout alone does not contain `dist/`; follow the guide's build/upload steps. Set `NODE_OPTIONS=--max-old-space-size=256` because launching a main file directly bypasses `npm start`.
 
 ## Logs and data
 
