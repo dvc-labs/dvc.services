@@ -3,21 +3,21 @@
 The Discord service bot for **dvc.labs** — a home for dvc. projects, experiments, and a look behind the scenes.
 
 [![CI](https://github.com/dvc-labs/dvc.services/actions/workflows/ci.yml/badge.svg)](https://github.com/dvc-labs/dvc.services/actions/workflows/ci.yml)
-![Version](https://img.shields.io/badge/version-0.1.1-26bcc5)
+![Version](https://img.shields.io/badge/version-0.1.2-26bcc5)
 ![Node.js](https://img.shields.io/badge/Node.js-24_LTS-26bcc5)
 [![MIT](https://img.shields.io/badge/license-MIT-26bcc5)](LICENSE)
 
-## v0.1.1
+## v0.1.2
 
-- A welcome embed and **Verify** button that gives the clicking member the configured access role.
+- A welcome embed and **Verify** button that opens a form. Type **verify** to receive the configured access role; capitalisation and surrounding spaces are ignored.
 - Private verification replies, duplicate-click protection, and checks for Discord membership screening.
 - A persistent panel: startup finds and refreshes the existing message, including across older history pages. No database is required.
-- `/about` with bot information, version, uptime, and links.
+- `/about` with bot information, version, uptime, links, and a hosting credit to [loon.host](https://loon.host).
 - `/verification` for team members with **Manage Server** to create or refresh the panel.
 - Informative Discord embeds with readable member, channel, and role references, plus structured console logs for startup, command use and denials, verification outcomes, panel updates, reconnection, and graceful shutdown.
 - Docker support with a non-root runtime, a 256 MB JavaScript heap limit, and small health endpoints.
 
-This is a lightweight access acknowledgement, **not a CAPTCHA or identity check**. Anyone who can press the button can receive the member role. Anti-raid protection remains Discord's responsibility.
+This is a lightweight access acknowledgement, **not a CAPTCHA or identity check**. Typing a fixed word adds a confirmation step but does not reliably stop automated accounts. Use Discord's own moderation and raid protections as appropriate.
 
 The bot registers its own **guild commands** on startup, updating them only when definitions change. There is no separate registration command. Run one instance for this application/server.
 
@@ -25,11 +25,11 @@ The bot registers its own **guild commands** on startup, updating them only when
 
 | Action | Who can use it | Where | Result |
 | --- | --- | --- | --- |
-| **Verify** button | Human server members | Current panel in `VERIFICATION_CHANNEL_ID` | Grants `VERIFICATION_ROLE_ID`; replies privately |
+| **Verify** button and form | Human server members | Current panel in `VERIFICATION_CHANNEL_ID` | Opens a form; submitting **verify** grants `VERIFICATION_ROLE_ID` and replies privately |
 | `/about` | Members with access to application commands | `COMMANDS_CHANNEL_ID` | Public information embed |
 | `/verification` | Members with **Manage Server** | `COMMANDS_CHANNEL_ID` | Creates or refreshes the panel; replies privately |
 
-The button works after process restarts without collectors or expiry timers. Requests are restricted to the configured server, channel, bot-authored message, and component ID. The bot fetches only the clicking member and adds one role without replacing their other roles. Already verified members receive a friendly acknowledgement. Members with pending Discord rules screening must finish that first.
+The button works after process restarts without collectors or expiry timers. Startup refreshes the existing panel with the latest instructions. Button and form requests are restricted to the configured server, channel, and current bot-authored message; each form is bound to the member who opened it. Clicking the button alone or submitting an incorrect word never grants a role. Incorrect answers receive private retry guidance. The bot fetches only the submitting member and adds one role without replacing their other roles. Already verified members receive a friendly acknowledgement. Members with pending Discord rules screening must finish that first.
 
 Role assignability is checked at startup and before each new award. The bot refuses `@everyone`, integration-managed roles, and roles with administrative or moderation permissions. Put the bot's highest role **above** the ordinary verification/member role.
 
