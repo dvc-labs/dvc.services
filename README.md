@@ -3,18 +3,18 @@
 The Discord service bot for **dvc.labs** — a home for dvc. projects, experiments, and a look behind the scenes.
 
 [![CI](https://github.com/dvc-labs/dvc.services/actions/workflows/ci.yml/badge.svg)](https://github.com/dvc-labs/dvc.services/actions/workflows/ci.yml)
-![Version](https://img.shields.io/badge/version-0.1.0-26bcc5)
+![Version](https://img.shields.io/badge/version-0.1.1-26bcc5)
 ![Node.js](https://img.shields.io/badge/Node.js-24_LTS-26bcc5)
 [![MIT](https://img.shields.io/badge/license-MIT-26bcc5)](LICENSE)
 
-## v0.1.0
+## v0.1.1
 
 - A welcome embed and **Verify** button that gives the clicking member the configured access role.
 - Private verification replies, duplicate-click protection, and checks for Discord membership screening.
 - A persistent panel: startup finds and refreshes the existing message, including across older history pages. No database is required.
 - `/about` with bot information, version, uptime, and links.
 - `/verification` for team members with **Manage Server** to create or refresh the panel.
-- Informative Discord embeds and structured console logs for startup, command use and denials, verification outcomes, panel updates, reconnection, and graceful shutdown.
+- Informative Discord embeds with readable member, channel, and role references, plus structured console logs for startup, command use and denials, verification outcomes, panel updates, reconnection, and graceful shutdown.
 - Docker support with a non-root runtime, a 256 MB JavaScript heap limit, and small health endpoints.
 
 This is a lightweight access acknowledgement, **not a CAPTCHA or identity check**. Anyone who can press the button can receive the member role. Anti-raid protection remains Discord's responsibility.
@@ -35,7 +35,7 @@ Role assignability is checked at startup and before each new award. The bot refu
 
 ## Environment variables
 
-Copy [`.env.example`](.env.example) for local or Docker Compose use. On loon.host, enter the same values in the service's environment/secret settings. Never put the token in GitHub, a Dockerfile, an image build argument, or a public screenshot.
+Copy [`.env.example`](.env.example) for local or Docker Compose use. On your hosting service, enter the same values in its environment/secret settings. Never put the token in GitHub, a Dockerfile, an image build argument, or a public screenshot.
 
 | Variable | Required | Value / default | Purpose |
 | --- | --- | --- | --- |
@@ -53,10 +53,18 @@ Copy [`.env.example`](.env.example) for local or Docker Compose use. On loon.hos
 | `TZ` | No | `Europe/Brussels` in Docker | Process timezone; structured log timestamps remain UTC |
 | `NODE_OPTIONS` | No | `--max-old-space-size=256` in Docker | Set the same value for a managed panel that runs the main file directly |
 
-The seven Discord variables must be supplied at runtime; the IDs above are prefilled in the example, not hard-coded into the bot. No client secret, public key, OAuth redirect URI, webhook URL, privileged intent, database, or persistent volume is needed. The brand colour is defined in source.
+The seven Discord variables must be supplied at runtime; replace the example's ID placeholders with your server's IDs. No client secret, public key, OAuth redirect URI, webhook URL, privileged intent, database, or persistent volume is needed. The brand colour is defined in source.
 
 Leave `VERIFICATION_MESSAGE_ID` empty for automatic discovery. If set, it must reference an existing panel from this application in the configured verification channel. A missing or invalid explicit ID stops startup rather than creating a duplicate. Clear it to allow recovery or use the correct ID.
 
 ## Logs and data
 
+Discord activity embeds show clickable member, channel, and role references, with notification parsing disabled. The hosting console keeps the exact IDs in structured JSON for diagnostics. Discord resolves references according to the viewer's access; references to unavailable or deleted resources may not display a name.
+
 Verification state is the member's Discord role. The panel lives in Discord message history. The application writes no local member database. Logs contain personal identifiers, so restrict access and set retention appropriately in Discord and your hosting provider. See [SECURITY.md](SECURITY.md).
+
+## TypeScript and JavaScript
+
+The maintained source is TypeScript in `src/`. `npm run build` checks the code and emits JavaScript into `dist/`; `npm start` runs `dist/index.js`. The `.js` import specifiers in TypeScript match the filenames that Node loads after compilation. Generated JavaScript is not maintained or committed separately.
+
+TypeScript catches mismatched Discord API types and data handling mistakes during development. The Dockerfile performs compilation automatically, so the production process runs ordinary JavaScript without a TypeScript loader.
