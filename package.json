@@ -1,6 +1,6 @@
 {
   "name": "dvc.services",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "description": "Verification and server utilities for the dvc.labs Discord community.",
   "type": "module",

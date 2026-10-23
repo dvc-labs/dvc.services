@@ -1,10 +1,11 @@
 import { MessageFlags, PermissionFlagsBits, type ButtonInteraction,
-  type ChatInputCommandInteraction, type Interaction } from 'discord.js';
+  type ChatInputCommandInteraction, type Interaction, type ModalSubmitInteraction } from 'discord.js';
 import type { AuditLog } from './audit.js';
 import type { Config } from './config.js';
 import { errorSummary, type Logger } from './logger.js';
-import { Cooldown, isTrustedVerificationButton, VERIFY_CUSTOM_ID } from './policy.js';
-import { aboutEmbed, embed } from './ui.js';
+import { Cooldown, isTrustedVerificationButton, isTrustedVerificationModal,
+  VERIFY_CUSTOM_ID, VERIFY_INPUT_CUSTOM_ID, VERIFY_MODAL_PREFIX } from './policy.js';
+import { aboutEmbed, embed, verificationModal } from './ui.js';
 import type { VerificationResult, VerificationService } from './verification.js';
 
 export interface RouterDependencies {
@@ -32,11 +33,13 @@ export class InteractionRouter {
   constructor(private readonly deps: RouterDependencies) {}
 
   async handle(interaction: Interaction): Promise<void> {
-    if (!interaction.isChatInputCommand() && !interaction.isButton()) return;
+    if (!interaction.isChatInputCommand() && !interaction.isButton() && !interaction.isModalSubmit()) return;
     // Ignore unrelated components if more features are added later.
     if (interaction.isButton() && interaction.customId !== VERIFY_CUSTOM_ID) return;
+    if (interaction.isModalSubmit() && !interaction.customId.startsWith(VERIFY_MODAL_PREFIX)) return;
     try {
       if (interaction.isChatInputCommand()) await this.command(interaction);
+      else if (interaction.isButton()) await this.openVerification(interaction);
       else await this.verify(interaction);
     } catch (error) {
       this.deps.logger.write('error', 'interaction_failed', { error: errorSummary(error) });
@@ -45,7 +48,7 @@ export class InteractionRouter {
     }
   }
 
-  private async privateReply(interaction: ChatInputCommandInteraction | ButtonInteraction,
+  private async privateReply(interaction: ChatInputCommandInteraction | ButtonInteraction | ModalSubmitInteraction,
     title: string, description: string): Promise<void> {
     try {
       const payload = { embeds: [embed(title, description)], allowedMentions: { parse: [] as never[] } };
@@ -110,7 +113,7 @@ export class InteractionRouter {
     }
   }
 
-  private async verify(interaction: ButtonInteraction): Promise<void> {
+  private async openVerification(interaction: ButtonInteraction): Promise<void> {
     const { config, audit } = this.deps;
     if (!this.deps.isReady() || !isTrustedVerificationButton({
       guildId: interaction.guildId, channelId: interaction.channelId,
@@ -123,6 +126,33 @@ export class InteractionRouter {
       }
       await this.privateReply(interaction, 'Verification unavailable',
         `Please use the current verification panel in <#${config.verificationChannelId}> once the bot is online.`);
+      return;
+    }
+    // A modal must be the initial response; opening it never fetches a member or awards a role.
+    await interaction.showModal(verificationModal(interaction.user.id, interaction.message.id));
+  }
+
+  private async verify(interaction: ModalSubmitInteraction): Promise<void> {
+    const { config, audit } = this.deps;
+    if (!this.deps.isReady() || !interaction.isFromMessage() || !isTrustedVerificationModal({
+      guildId: interaction.guildId, channelId: interaction.channelId, userId: interaction.user.id,
+      authorId: interaction.message.author.id, messageId: interaction.message.id, customId: interaction.customId,
+    }, { guildId: config.guildId, channelId: config.verificationChannelId,
+      botId: this.deps.botId(), messageId: this.deps.panelId() })) {
+      if (interaction.guildId === config.guildId) {
+        audit.record({ event: 'verification_denied', title: 'Verification not accepted',
+          outcome: 'invalid_form_or_panel', userId: interaction.user.id,
+          ...(interaction.channelId ? { channelId: interaction.channelId } : {}) });
+      }
+      await this.privateReply(interaction, 'Please open a new form',
+        `Press **Verify** on the current panel in <#${config.verificationChannelId}> and try again.`);
+      return;
+    }
+    if (interaction.fields.getTextInputValue(VERIFY_INPUT_CUSTOM_ID).trim().toLowerCase() !== 'verify') {
+      audit.record({ event: 'verification_attempt', title: 'Verification attempt', outcome: 'incorrect_word',
+        userId: interaction.user.id, channelId: interaction.channelId });
+      await this.privateReply(interaction, 'Check the verification word',
+        'Please press **Verify** again and type **verify** in the form. Capitalisation does not matter.');
       return;
     }
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
