@@ -1,0 +1,27 @@
+# Allow only the files required to compile and run the bot.
+# Everything else, including .git, .env, secrets, tests, docs, logs, caches,
+# node_modules, and local build output, stays outside the build context.
+**
+!package.json
+!package-lock.json
+!tsconfig.json
+!tsconfig.build.json
+!src/
+!src/**/*.ts
+!LICENSE
+!Dockerfile
+.env
+.env.*
+**/.env
+**/.env.*
+**/*.env
+**/*.pem
+**/*.key
+**/*.p12
+**/*.pfx
+**/*.keystore
+**/credentials*.json
+**/service-account*.json
+**/secrets/**
+**/node_modules
+**/*.log
