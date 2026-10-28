@@ -70,6 +70,45 @@ test('Discord log queue is bounded during an outage or rate limit', async () => 
   assert.equal(sent, 101); // One in flight plus 100 waiting.
 });
 
+test('explicit console-only events cannot displace Discord audit events during a backlog', async () => {
+  const logger = new Logger('info', '');
+  const records: Parameters<Logger['write']>[] = [];
+  logger.write = (...args) => { records.push(args); };
+  const audit = new AuditLog(logger);
+  const delivered: AuditEvent[] = [];
+  let release!: () => void;
+  const blocked = new Promise<void>(resolve => { release = resolve; });
+  audit.setSink(async value => { await blocked; delivered.push(value); });
+  audit.record(event);
+  for (let i = 0; i < 150; i++) {
+    audit.record({ ...event, event: 'verification_attempt', outcome: 'cooldown', discord: false });
+    audit.record({ ...event, event: 'verification_attempt', outcome: 'processing', discord: false });
+    audit.record({ ...event, event: 'command_used', outcome: 'cooldown', discord: false });
+  }
+  audit.record({ ...event, userId: 'another-member' });
+  release();
+  await audit.flush();
+  assert.deepEqual(delivered, [event, { ...event, userId: 'another-member' }]);
+  assert.equal(records.length, 452);
+  assert.equal(records.some(([, name]) => name === 'audit_queue_full'), false);
+});
+
+test('Discord delivery is explicit and independent of event names or outcome words', async () => {
+  const audit = new AuditLog(new Logger('error', ''));
+  const delivered: AuditEvent[] = [];
+  audit.setSink(async value => { delivered.push(value); });
+  const expected: AuditEvent[] = [];
+  for (const outcome of ['cooldown', 'processing', 'awarded']) {
+    const futureEvent = { ...event, event: 'another_feature', outcome };
+    audit.record(futureEvent);
+    audit.record({ ...futureEvent, discord: true });
+    audit.record({ ...futureEvent, discord: false });
+    expected.push(futureEvent, { ...futureEvent, discord: true });
+  }
+  await audit.flush();
+  assert.deepEqual(delivered, expected);
+});
+
 test('structured console logs redact the configured bot token', () => {
   const output = mock.method(console, 'log', () => {});
   try {

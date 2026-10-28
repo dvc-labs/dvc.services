@@ -54,6 +54,6 @@ Describe what you checked in the pull request, including anything you could not 
 
 ## Release notes
 
-Document user-visible changes in the README's release section. The bot reads its version from `package.json`; keep the lockfile, README badge, and release documentation consistent when bumping it. The container smoke check intentionally expects the release version and must be updated with a version bump.
+Document user-visible changes in the README's release section. The bot reads its version from `package.json`; keep the lockfile, README badge, and release documentation consistent when bumping it. The container smoke check reads the expected version from the checkout's `package.json` automatically.
 
 By contributing, you agree that your contribution is licensed under the repository's [MIT licence](LICENSE).

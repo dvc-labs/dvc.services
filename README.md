@@ -3,21 +3,22 @@
 The Discord service bot for **dvc.labs** — a home for dvc. projects, experiments, and a look behind the scenes.
 
 [![CI](https://github.com/dvc-labs/dvc.services/actions/workflows/ci.yml/badge.svg)](https://github.com/dvc-labs/dvc.services/actions/workflows/ci.yml)
-![Version](https://img.shields.io/badge/version-0.1.2-26bcc5)
+![Version](https://img.shields.io/badge/version-0.1.3-26bcc5)
 ![Node.js](https://img.shields.io/badge/Node.js-24_LTS-26bcc5)
 [![MIT](https://img.shields.io/badge/license-MIT-26bcc5)](LICENSE)
 
-## v0.1.2
+## v0.1.3
 
-- A welcome embed and **Verify** button that opens a form. Type **verify** to receive the configured access role; capitalisation and surrounding spaces are ignored.
+- A welcome embed and **Verify** button that grants the configured access role with one click. No form or typed word is required.
 - Private verification replies, duplicate-click protection, and checks for Discord membership screening.
 - A persistent panel: startup finds and refreshes the existing message, including across older history pages. No database is required.
 - `/about` with bot information, version, uptime, links, and a hosting credit to [loon.host](https://loon.host).
 - `/verification` for team members with **Manage Server** to create or refresh the panel.
-- Informative Discord embeds with readable member, channel, and role references, plus structured console logs for startup, command use and denials, verification outcomes, panel updates, reconnection, and graceful shutdown.
+- Informative Discord embeds with readable member, channel, and role references, plus structured console logs for startup, command use and denials, verification outcomes, panel updates, reconnection, and graceful shutdown. Cooldown, in-progress, and reconnection diagnostics stay in the console to preserve space for useful Discord activity logs.
+- Actionable runtime setup errors in operator logs with generic private failure replies, command comparison that handles nested Discord options, a container version check derived from `package.json`, and configurable ID placeholders in `.env.example`.
 - Docker support with a non-root runtime, a 256 MB JavaScript heap limit, and small health endpoints.
 
-This is a lightweight access acknowledgement, **not a CAPTCHA or identity check**. Typing a fixed word adds a confirmation step but does not reliably stop automated accounts. Use Discord's own moderation and raid protections as appropriate.
+This is a lightweight access acknowledgement, **not a CAPTCHA or identity check**. A single button press does not reliably stop automated accounts. Use Discord's own moderation and raid protections as appropriate.
 
 The bot registers its own **guild commands** on startup, updating them only when definitions change. There is no separate registration command. Run one instance for this application/server.
 
@@ -25,11 +26,13 @@ The bot registers its own **guild commands** on startup, updating them only when
 
 | Action | Who can use it | Where | Result |
 | --- | --- | --- | --- |
-| **Verify** button and form | Human server members | Current panel in `VERIFICATION_CHANNEL_ID` | Opens a form; submitting **verify** grants `VERIFICATION_ROLE_ID` and replies privately |
+| **Verify** button | Human server members | Current panel in `VERIFICATION_CHANNEL_ID` | Grants `VERIFICATION_ROLE_ID` and replies privately |
 | `/about` | Members with access to application commands | `COMMANDS_CHANNEL_ID` | Public information embed |
 | `/verification` | Members with **Manage Server** | `COMMANDS_CHANNEL_ID` | Creates or refreshes the panel; replies privately |
 
-The button works after process restarts without collectors or expiry timers. Startup refreshes the existing panel with the latest instructions. Button and form requests are restricted to the configured server, channel, and current bot-authored message; each form is bound to the member who opened it. Clicking the button alone or submitting an incorrect word never grants a role. Incorrect answers receive private retry guidance. The bot fetches only the submitting member and adds one role without replacing their other roles. Already verified members receive a friendly acknowledgement. Members with pending Discord rules screening must finish that first.
+The button works after process restarts without collectors or expiry timers. Startup refreshes the existing panel with the latest instructions, reusing the same button ID (`dvc:verify:v1`). Requests are restricted to the configured server, channel, and current bot-authored message. The bot replies privately, fetches only the clicking member, and adds one role without replacing their other roles. Already verified members receive a friendly acknowledgement. Members with pending Discord rules screening must finish that first.
+
+When upgrading from v0.1.2, stop the old instance before starting the new one so it cannot continue opening forms. Forms opened before the upgrade are ignored; close the old form and press **Verify** again.
 
 Role assignability is checked at startup and before each new award. The bot refuses `@everyone`, integration-managed roles, and roles with administrative or moderation permissions. Put the bot's highest role **above** the ordinary verification/member role.
 
@@ -40,12 +43,12 @@ Copy [`.env.example`](.env.example) for local or Docker Compose use. On your hos
 | Variable | Required | Value / default | Purpose |
 | --- | --- | --- | --- |
 | `DISCORD_TOKEN` | Yes, secret | Obtain from Developer Portal → Bot | Raw bot token; no `Bot ` prefix |
-| `GUILD_ID` | Yes | `x` | dvc.labs server |
-| `APPLICATION_ID` | Yes | `x` | Discord application |
-| `VERIFICATION_ROLE_ID` | Yes | `x` | Ordinary member/access role |
-| `VERIFICATION_CHANNEL_ID` | Yes | `x` | Welcome and verification text channel |
-| `COMMANDS_CHANNEL_ID` | Yes | `x` | Slash-command text channel |
-| `LOGS_CHANNEL_ID` | Yes | `x` | Preferably private team logs text channel |
+| `GUILD_ID` | Yes | Your server ID | dvc.labs server |
+| `APPLICATION_ID` | Yes | Your application ID | Discord application |
+| `VERIFICATION_ROLE_ID` | Yes | Your role ID | Ordinary member/access role |
+| `VERIFICATION_CHANNEL_ID` | Yes | Your channel ID | Welcome and verification text channel |
+| `COMMANDS_CHANNEL_ID` | Yes | Your channel ID | Slash-command text channel |
+| `LOGS_CHANNEL_ID` | Yes | Your channel ID | Preferably private team logs text channel |
 | `VERIFICATION_MESSAGE_ID` | No | Empty | Select an existing bot-authored verification panel explicitly |
 | `PORT` | No | `8080` | Internal health server, bound to `0.0.0.0`; use the host's assigned port if needed |
 | `LOG_LEVEL` | No | `info` | `debug`, `info`, `warn`, or `error`; filters console output only |
@@ -60,6 +63,10 @@ Leave `VERIFICATION_MESSAGE_ID` empty for automatic discovery. If set, it must r
 ## Logs and data
 
 Discord activity embeds show clickable member, channel, and role references, with notification parsing disabled. The hosting console keeps the exact IDs in structured JSON for diagnostics. Discord resolves references according to the viewer's access; references to unavailable or deleted resources may not display a name.
+
+Cooldown and in-progress results are explicitly marked for console-only logging, as are connection resumes. Discord audit delivery is best effort with at most 100 queued events. Locally authored setup errors retain their corrective messages in operator logs; other logged errors expose only safe names and numeric codes/statuses. Private failure replies show generic retry guidance without setup details.
+
+Unhandled promise rejections and uncaught exceptions deliberately shut the bot down with a nonzero exit code. Configure a host restart policy (Docker Compose uses `unless-stopped`). Expected interaction, audit-send, and connection errors are handled locally; an unhandled rejection indicates an uncontained failure that needs investigation.
 
 Verification state is the member's Discord role. The panel lives in Discord message history. The application writes no local member database. Logs contain personal identifiers, so restrict access and set retention appropriately in Discord and your hosting provider. See [SECURITY.md](SECURITY.md).
 

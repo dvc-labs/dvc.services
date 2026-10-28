@@ -2,8 +2,6 @@ import { SetupError } from './errors.js';
 import { PermissionFlagsBits, PermissionsBitField } from 'discord.js';
 
 export const VERIFY_CUSTOM_ID = 'dvc:verify:v1';
-export const VERIFY_MODAL_PREFIX = 'dvc:verify:form:v1:';
-export const VERIFY_INPUT_CUSTOM_ID = 'verification-word';
 
 interface VerificationContext {
   guildId: string | null;
@@ -32,18 +30,6 @@ function isTrustedVerificationPanel(
 
 export function isTrustedVerificationButton(context: VerificationContext, expected: ExpectedPanel): boolean {
   return isTrustedVerificationPanel(context, expected) && context.customId === VERIFY_CUSTOM_ID;
-}
-
-export function verificationModalId(userId: string, messageId: string): string {
-  return `${VERIFY_MODAL_PREFIX}${userId}:${messageId}`;
-}
-
-export function isTrustedVerificationModal(
-  context: VerificationContext & { userId: string },
-  expected: ExpectedPanel,
-): boolean {
-  return isTrustedVerificationPanel(context, expected)
-    && context.customId === verificationModalId(context.userId, context.messageId);
 }
 
 const elevatedPermissions = [

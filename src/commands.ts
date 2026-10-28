@@ -1,4 +1,4 @@
-import { ApplicationCommandType, PermissionFlagsBits, SlashCommandBuilder, type Guild } from 'discord.js';
+import { PermissionFlagsBits, SlashCommandBuilder, type ApplicationCommandData, type Guild } from 'discord.js';
 
 export const commands = [
   new SlashCommandBuilder().setName('about').setDescription('About dvc.services and dvc.labs.'),
@@ -7,35 +7,16 @@ export const commands = [
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
 ];
 
-interface CommandShape {
-  name: string;
-  description: string;
-  type?: number | undefined;
-  default_member_permissions?: string | null | undefined;
-  options?: unknown[] | undefined;
-}
-
-export function commandSignature(definitions: CommandShape[]): string {
-  return JSON.stringify(definitions.map(command => ({
-    name: command.name,
-    description: command.description,
-    type: command.type ?? ApplicationCommandType.ChatInput,
-    default_member_permissions: command.default_member_permissions ?? null,
-    options: command.options ?? [],
-  })).sort((a, b) => a.name.localeCompare(b.name)));
-}
-
 export async function syncCommands(guild: Guild): Promise<boolean> {
   const existing = await guild.commands.fetch();
   const desired = commands.map(command => command.toJSON());
-  const current = existing.map(command => ({
-    name: command.name,
-    description: command.description,
-    type: command.type,
-    default_member_permissions: command.defaultMemberPermissions?.bitfield.toString() ?? null,
-    options: command.options,
-  }));
-  if (commandSignature(current) === commandSignature(desired)) return false;
+  // discord.js compares received camelCase options with API snake_case definitions,
+  // including nested options, defaults, and localisations. Keep option order meaningful.
+  // Builder JSON is supported at runtime; its types also allow explicit undefined fields.
+  if (existing.size === desired.length
+    && desired.every(definition => existing.some(command => command.equals({
+      ...definition, nsfw: definition.nsfw ?? false,
+    } as ApplicationCommandData, true)))) return false;
   await guild.commands.set(desired);
   return true;
 }

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { PermissionFlagsBits, PermissionsBitField } from 'discord.js';
-import { commandSignature, commands } from '../src/commands.js';
+import { commands } from '../src/commands.js';
 import { loadConfig } from '../src/config.js';
 import { errorSummary } from '../src/logger.js';
 import { assertSafeVerificationRole, Cooldown, isTrustedVerificationButton, VERIFY_CUSTOM_ID } from '../src/policy.js';
@@ -12,18 +12,18 @@ import { BRAND_COLOR, VERSION } from '../src/version.js';
 export function environment(): NodeJS.ProcessEnv {
   return {
     DISCORD_TOKEN: 'unit-test-token',
-    GUILD_ID: '1562082957022204006',
-    APPLICATION_ID: '1562644412570538006',
-    VERIFICATION_ROLE_ID: '1562110350734790696',
-    VERIFICATION_CHANNEL_ID: '1562263151960006736',
-    COMMANDS_CHANNEL_ID: '1562240268659462185',
-    LOGS_CHANNEL_ID: '1562628586584932454',
+    GUILD_ID: '111111111111111111',
+    APPLICATION_ID: '222222222222222222',
+    VERIFICATION_ROLE_ID: '333333333333333333',
+    VERIFICATION_CHANNEL_ID: '444444444444444444',
+    COMMANDS_CHANNEL_ID: '555555555555555555',
+    LOGS_CHANNEL_ID: '666666666666666666',
   };
 }
 
 test('configuration preserves snowflakes as exact strings and applies defaults', () => {
   const config = loadConfig(environment());
-  assert.equal(config.guildId, '1562082957022204006');
+  assert.equal(config.guildId, '111111111111111111');
   assert.equal(config.port, 8080);
   assert.equal(config.logLevel, 'info');
   assert.equal(config.verificationMessageId, undefined);
@@ -86,11 +86,8 @@ test('cooldowns are per member and expire', () => {
   assert.equal(cooldown.take('a'), true);
 });
 
-test('command sync ignores ordering but detects permission and description changes', () => {
+test('panel command requires Manage Server by default', () => {
   const definitions = commands.map(command => command.toJSON());
-  assert.equal(commandSignature(definitions), commandSignature([...definitions].reverse()));
-  assert.notEqual(commandSignature(definitions), commandSignature(definitions.map(command => ({ ...command, description: 'Changed' }))));
-  assert.notEqual(commandSignature(definitions), commandSignature(definitions.map(command => ({ ...command, default_member_permissions: null }))));
   assert.equal(definitions.find(command => command.name === 'verification')!.default_member_permissions,
     PermissionFlagsBits.ManageGuild.toString());
 });
