@@ -111,7 +111,7 @@ client.on(Events.Error, error => logger.write('error', 'discord_client_error', {
 client.on(Events.ShardError, error => logger.write('warn', 'discord_connection_error', { error: errorSummary(error) }));
 client.on(Events.ShardDisconnect, (_event, shardId) => logger.write('warn', 'discord_disconnected', { shardId }));
 client.on(Events.ShardReconnecting, shardId => logger.write('info', 'discord_reconnecting', { shardId }));
-client.on(Events.ShardResume, () => audit.record({ event: 'bot_reconnected', title: 'Discord connection restored', outcome: 'resumed' }));
+client.on(Events.ShardResume, shardId => logger.write('info', 'bot_reconnected', { outcome: 'resumed', shardId }));
 client.on(Events.Invalidated, () => { void shutdown('session_invalidated', 1); });
 health.on('error', error => {
   logger.write('error', 'health_server_failed', { error: errorSummary(error) });

@@ -1,9 +1,8 @@
 import {
   ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder,
-  LabelBuilder, ModalBuilder, TextInputBuilder, TextInputStyle,
 } from 'discord.js';
 import type { Config } from './config.js';
-import { verificationModalId, VERIFY_CUSTOM_ID, VERIFY_INPUT_CUSTOM_ID } from './policy.js';
+import { VERIFY_CUSTOM_ID } from './policy.js';
 import { BRAND_COLOR, REPOSITORY_URL, VERSION, WEBSITE_URL } from './version.js';
 
 export function embed(title: string, description?: string): EmbedBuilder {
@@ -19,29 +18,13 @@ export function verificationPanel() {
   return {
     embeds: [embed('Welcome to dvc.labs',
       'A place for projects, experiments, and a look behind the scenes at dvc.\n\n'
-      + 'Take a moment to read the server rules, then press **Verify** and type **verify** in the form to unlock the community. '
-      + 'Capitalisation does not matter. '
+      + 'Take a moment to read the server rules, then press **Verify** to unlock the community. '
       + 'No external login or extra information is needed.')],
     components: [new ActionRowBuilder<ButtonBuilder>().addComponents(
       new ButtonBuilder().setCustomId(VERIFY_CUSTOM_ID).setLabel('Verify').setStyle(ButtonStyle.Primary),
     )],
     allowedMentions: { parse: [] as never[] },
   };
-}
-
-export function verificationModal(userId: string, messageId: string): ModalBuilder {
-  return new ModalBuilder()
-    .setCustomId(verificationModalId(userId, messageId))
-    .setTitle('Verify for dvc.labs')
-    .addLabelComponents(new LabelBuilder()
-      .setLabel('Type verify to unlock the server')
-      .setDescription('Capitalisation does not matter.')
-      .setTextInputComponent(new TextInputBuilder()
-        .setCustomId(VERIFY_INPUT_CUSTOM_ID)
-        .setStyle(TextInputStyle.Short)
-        .setPlaceholder('verify')
-        .setMaxLength(32)
-        .setRequired(true)));
 }
 
 export function aboutEmbed(config: Config, uptimeSeconds: number): EmbedBuilder {

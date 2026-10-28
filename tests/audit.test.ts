@@ -70,6 +70,29 @@ test('Discord log queue is bounded during an outage or rate limit', async () => 
   assert.equal(sent, 101); // One in flight plus 100 waiting.
 });
 
+test('cooldown and processing events stay in console logs without entering the Discord queue', async () => {
+  const logger = new Logger('info', '');
+  const records: Parameters<Logger['write']>[] = [];
+  logger.write = (...args) => { records.push(args); };
+  const audit = new AuditLog(logger);
+  const delivered: AuditEvent[] = [];
+  let release!: () => void;
+  const blocked = new Promise<void>(resolve => { release = resolve; });
+  audit.setSink(async value => { await blocked; delivered.push(value); });
+  audit.record(event);
+  for (let i = 0; i < 150; i++) {
+    audit.record({ ...event, event: 'verification_attempt', outcome: 'cooldown' });
+    audit.record({ ...event, event: 'verification_attempt', outcome: 'processing' });
+    audit.record({ ...event, event: 'command_used', outcome: 'cooldown' });
+  }
+  audit.record({ ...event, userId: 'another-member' });
+  release();
+  await audit.flush();
+  assert.deepEqual(delivered, [event, { ...event, userId: 'another-member' }]);
+  assert.equal(records.length, 452);
+  assert.equal(records.some(([, name]) => name === 'audit_queue_full'), false);
+});
+
 test('structured console logs redact the configured bot token', () => {
   const output = mock.method(console, 'log', () => {});
   try {

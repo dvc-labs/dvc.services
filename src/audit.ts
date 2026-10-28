@@ -43,7 +43,8 @@ export class AuditLog {
       outcome: event.outcome, userId: event.userId, channelId: event.channelId,
       command: event.command, roleId: event.roleId, detail: event.detail,
     });
-    if (!this.sink) return;
+    // Repeated requests remain visible locally without crowding out role awards.
+    if (!this.sink || event.outcome === 'cooldown' || event.outcome === 'processing') return;
     if (this.queue.length >= 100) {
       this.logger.write('warn', 'audit_queue_full', { outcome: 'Discord copy dropped; console copy retained' });
       return;
