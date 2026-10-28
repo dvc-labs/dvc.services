@@ -11,6 +11,8 @@ export interface AuditEvent {
   command?: string;
   roleId?: string;
   detail?: string;
+  // Defaults to true; false retains the console copy without queueing a Discord post.
+  discord?: boolean;
 }
 
 export type AuditSink = (event: AuditEvent) => Promise<void>;
@@ -43,8 +45,7 @@ export class AuditLog {
       outcome: event.outcome, userId: event.userId, channelId: event.channelId,
       command: event.command, roleId: event.roleId, detail: event.detail,
     });
-    // Repeated requests remain visible locally without crowding out role awards.
-    if (!this.sink || event.outcome === 'cooldown' || event.outcome === 'processing') return;
+    if (!this.sink || event.discord === false) return;
     if (this.queue.length >= 100) {
       this.logger.write('warn', 'audit_queue_full', { outcome: 'Discord copy dropped; console copy retained' });
       return;

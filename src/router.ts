@@ -43,13 +43,8 @@ export class InteractionRouter {
       this.deps.logger.write('error', 'interaction_failed', {
         error: error instanceof SetupError ? error.message : errorSummary(error),
       });
-      if (error instanceof SetupError) {
-        await this.privateReply(interaction, 'Bot setup needs attention',
-          `${error.message} Please let the dvc.labs team know.`);
-      } else {
-        await this.privateReply(interaction, 'Something went wrong',
-          'Please try again shortly. If this continues, let the dvc.labs team know so they can check the bot.');
-      }
+      await this.privateReply(interaction, 'Something went wrong',
+        'Please try again shortly. If this continues, let the dvc.labs team know so they can check the bot.');
     }
   }
 
@@ -118,6 +113,7 @@ export class InteractionRouter {
       if (interaction.guildId === config.guildId) {
         audit.record({ event: 'command_used', title: 'Command used', outcome,
           userId: interaction.user.id, channelId: interaction.channelId, command: interaction.commandName,
+          discord: outcome !== 'cooldown',
           ...(detail ? { detail } : {}) });
       }
     }
@@ -151,6 +147,7 @@ export class InteractionRouter {
       event: result === 'awarded' ? 'verification_succeeded' : 'verification_attempt',
       title: result === 'awarded' ? 'Member verified — role awarded' : 'Verification attempt',
       outcome: result, userId: interaction.user.id, channelId: interaction.channelId,
+      discord: result !== 'cooldown' && result !== 'processing',
       ...(result === 'awarded' ? { roleId: config.verificationRoleId } : {}),
     });
     const [title, description] = verificationReplies[result];

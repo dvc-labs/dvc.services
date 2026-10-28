@@ -125,7 +125,7 @@ test('a failed role write produces failure logs and no success event', async () 
   assert.equal(JSON.stringify(f.replies).includes('private token'), false);
 });
 
-test('runtime role setup errors retain actionable messages in logs and private replies', async () => {
+test('runtime role setup errors retain details in operator logs and give members generic private guidance', async () => {
   const f = fixture();
   const message = 'Move the dvc.services bot role above the verification role.';
   f.gateway.assertRoleAssignable = async () => { throw new SetupError(message); };
@@ -133,7 +133,8 @@ test('runtime role setup errors retain actionable messages in logs and private r
   assert.deepEqual(f.awarded, []);
   assert.equal(f.events[0]!.detail, message);
   assert.equal(f.logs.find(([, event]) => event === 'interaction_failed')![2]!.error, message);
-  assert.ok(JSON.stringify(f.replies).includes(message));
+  assert.equal(JSON.stringify(f.replies).includes(message), false);
+  assert.ok(JSON.stringify(f.replies).includes('Please try again shortly.'));
   assert.deepEqual(f.replies[0], { flags: MessageFlags.Ephemeral });
 });
 
@@ -212,7 +213,7 @@ test('panel command enforces Manage Server at runtime and logs denial', async ()
   assert.equal(f.events[0]!.outcome, 'denied_permission');
 });
 
-test('stale explicit panel configuration is actionable in the command audit and private reply', async () => {
+test('stale explicit panel configuration is actionable in operator logs with generic private guidance', async () => {
   const f = fixture('command');
   f.raw.commandName = 'verification';
   f.raw.memberPermissions = new PermissionsBitField(PermissionFlagsBits.ManageGuild);
@@ -223,7 +224,8 @@ test('stale explicit panel configuration is actionable in the command audit and 
   assert.equal(f.events[0]!.outcome, 'error');
   assert.equal(f.events[0]!.detail, message);
   assert.equal(f.logs.find(([, event]) => event === 'interaction_failed')![2]!.error, message);
-  assert.ok(JSON.stringify(f.replies).includes(message));
+  assert.equal(JSON.stringify(f.replies).includes(message), false);
+  assert.ok(JSON.stringify(f.replies).includes('Please try again shortly.'));
   assert.deepEqual(f.replies[0], { flags: MessageFlags.Ephemeral });
 });
 

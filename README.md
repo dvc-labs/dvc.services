@@ -15,7 +15,7 @@ The Discord service bot for **dvc.labs** — a home for dvc. projects, experimen
 - `/about` with bot information, version, uptime, links, and a hosting credit to [loon.host](https://loon.host).
 - `/verification` for team members with **Manage Server** to create or refresh the panel.
 - Informative Discord embeds with readable member, channel, and role references, plus structured console logs for startup, command use and denials, verification outcomes, panel updates, reconnection, and graceful shutdown. Cooldown, in-progress, and reconnection diagnostics stay in the console to preserve space for useful Discord activity logs.
-- Actionable runtime setup errors in private replies and logs, command comparison that handles nested Discord options, a container version check derived from `package.json`, and configurable ID placeholders in `.env.example`.
+- Actionable runtime setup errors in operator logs with generic private failure replies, command comparison that handles nested Discord options, a container version check derived from `package.json`, and configurable ID placeholders in `.env.example`.
 - Docker support with a non-root runtime, a 256 MB JavaScript heap limit, and small health endpoints.
 
 This is a lightweight access acknowledgement, **not a CAPTCHA or identity check**. A single button press does not reliably stop automated accounts. Use Discord's own moderation and raid protections as appropriate.
@@ -64,7 +64,7 @@ Leave `VERIFICATION_MESSAGE_ID` empty for automatic discovery. If set, it must r
 
 Discord activity embeds show clickable member, channel, and role references, with notification parsing disabled. The hosting console keeps the exact IDs in structured JSON for diagnostics. Discord resolves references according to the viewer's access; references to unavailable or deleted resources may not display a name.
 
-Cooldown and in-progress results are logged only to the console, as are connection resumes. Discord audit delivery is best effort with at most 100 queued events. Locally authored setup errors retain their corrective messages; other errors expose only safe names and numeric codes/statuses.
+Cooldown and in-progress results are explicitly marked for console-only logging, as are connection resumes. Discord audit delivery is best effort with at most 100 queued events. Locally authored setup errors retain their corrective messages in operator logs; other logged errors expose only safe names and numeric codes/statuses. Private failure replies show generic retry guidance without setup details.
 
 Unhandled promise rejections and uncaught exceptions deliberately shut the bot down with a nonzero exit code. Configure a host restart policy (Docker Compose uses `unless-stopped`). Expected interaction, audit-send, and connection errors are handled locally; an unhandled rejection indicates an uncontained failure that needs investigation.
 
