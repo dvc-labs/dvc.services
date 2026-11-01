@@ -1,4 +1,4 @@
-import { MessageFlags, PermissionFlagsBits, TextDisplayBuilder, roleMention, userMention, type ButtonInteraction,
+import { MessageFlags, PermissionFlagsBits, roleMention, userMention, type ButtonInteraction,
   type ChatInputCommandInteraction, type Interaction } from 'discord.js';
 import type { AuditLog } from './audit.js';
 import type { Config } from './config.js';
@@ -7,7 +7,7 @@ import { errorSummary, type Logger } from './logger.js';
 import { MemberLookupLimiter, MemberReportCache, memberCard, memberView, parseMemberDetails,
   parseMemberNavigation, type MemberReport } from './member.js';
 import { Cooldown, isTrustedVerificationButton, MEMBER_CUSTOM_ID_PREFIX, VERIFY_CUSTOM_ID } from './policy.js';
-import { aboutCard, brandedTitle, card, NO_MENTIONS } from './ui.js';
+import { aboutCard, brandedTitle, card } from './ui.js';
 import type { VerificationResult, VerificationService } from './verification.js';
 
 export interface RouterDependencies {
@@ -70,11 +70,10 @@ export class InteractionRouter {
     }
     const publicCommand = interaction.isChatInputCommand();
     // Discord treats a first follow-up immediately after a defer as an edit and
-    // ignores its ephemeral flag. Complete the defer with a blank V2 response first.
+    // ignores its ephemeral flag. Complete the defer with a valid non-empty V2 response.
     if (publicCommand) {
       try {
-        await interaction.editReply({ flags: MessageFlags.IsComponentsV2,
-          components: [new TextDisplayBuilder().setContent('\u200b')], allowedMentions: NO_MENTIONS });
+        await interaction.editReply(card('Lookup finished'));
       } catch (error) {
         this.deps.logger.write('warn', 'interaction_cleanup_failed', { error: errorSummary(error) });
         try { await interaction.deleteReply(); } catch { /* Best-effort removal of a failed placeholder. */ }
@@ -140,6 +139,11 @@ export class InteractionRouter {
         outcome = 'success';
       } else if (interaction.commandName === 'member') {
         targetUserId = interaction.options.getUser('user', true).id;
+        if (!interaction.options.getMember('user')) {
+          outcome = 'member_not_found';
+          await this.respond(interaction, 'Member not found', 'That account is not currently a member of dvc.labs.');
+          return;
+        }
         const permit = this.memberLookupLimiter.acquire(interaction.user.id);
         if (!permit.allowed) {
           outcome = 'rate_limited';
@@ -181,7 +185,7 @@ export class InteractionRouter {
         audit.record({ event: 'command_used', title: 'Command used', outcome,
           userId: interaction.user.id, channelId: interaction.channelId, command: interaction.commandName,
           discord: outcome !== 'cooldown' && outcome !== 'rate_limited',
-          critical: outcome === 'error',
+          priority: outcome === 'error' ? 'critical' : 'routine',
           ...(targetUserId ? { targetUserId } : {}),
           ...(detail ? { detail } : {}) });
       }
@@ -191,11 +195,21 @@ export class InteractionRouter {
   private async memberPage(interaction: ButtonInteraction): Promise<void> {
     const { config, audit } = this.deps;
     const navigation = parseMemberNavigation(interaction.customId);
-    const snapshot = this.memberReports.get(interaction.message.id);
     if (!navigation || navigation.ownerId !== interaction.user.id
       || interaction.guildId !== config.guildId || interaction.channelId !== config.commandsChannelId
-      || interaction.message.author.id !== this.deps.botId() || !this.deps.isReady()
-      || !snapshot || snapshot.ownerId !== navigation.ownerId || snapshot.report.userId !== navigation.userId
+      || interaction.message.author.id !== this.deps.botId() || !this.deps.isReady()) {
+      await this.respond(interaction, 'Member lookup unavailable', 'Use /member in the commands channel to open your own lookup.');
+      if (interaction.guildId === config.guildId) audit.record({ event: 'member_lookup_denied',
+        title: 'Member lookup denied', outcome: 'invalid_navigation', userId: interaction.user.id,
+        channelId: interaction.channelId, discord: false });
+      return;
+    }
+    const snapshot = this.memberReports.get(interaction.message.id);
+    if (!snapshot) {
+      await this.expiredMemberCard(interaction);
+      return;
+    }
+    if (snapshot.ownerId !== navigation.ownerId || snapshot.report.userId !== navigation.userId
       || snapshot.guildId !== interaction.guildId || snapshot.channelId !== interaction.channelId
       || (snapshot.staff && !this.isStaff(interaction))) {
       await this.respond(interaction, 'Member lookup unavailable', 'Use /member in the commands channel to open your own lookup.');
@@ -227,10 +241,21 @@ export class InteractionRouter {
       || interaction.memberPermissions?.has(PermissionFlagsBits.ModerateMembers));
   }
 
+  private async expiredMemberCard(interaction: ButtonInteraction): Promise<void> {
+    await this.respond(interaction, 'Member card expired', 'This card has expired. Run /member again for fresh details.');
+    this.deps.audit.record({ event: 'member_lookup_denied', title: 'Member card expired', outcome: 'expired_navigation',
+      userId: interaction.user.id, channelId: interaction.channelId, discord: false });
+  }
+
   private async memberDetails(interaction: ButtonInteraction): Promise<void> {
     const { config, audit } = this.deps;
     const target = parseMemberDetails(interaction.customId)!;
     const snapshot = this.memberReports.get(interaction.message.id);
+    if (this.deps.isReady() && interaction.guildId === config.guildId && interaction.channelId === config.commandsChannelId
+      && interaction.message.author.id === this.deps.botId() && this.isStaff(interaction) && !snapshot) {
+      await this.expiredMemberCard(interaction);
+      return;
+    }
     if (!this.deps.isReady() || interaction.guildId !== config.guildId || interaction.channelId !== config.commandsChannelId
       || interaction.message.author.id !== this.deps.botId() || !snapshot || snapshot.staff
       || snapshot.ownerId !== target.ownerId || snapshot.report.userId !== target.userId
@@ -288,7 +313,7 @@ export class InteractionRouter {
     catch (error) {
       audit.record({ event: 'verification_failed', title: 'Verification failed', outcome: 'error',
         userId: interaction.user.id, channelId: interaction.channelId,
-        critical: true,
+        priority: 'critical',
         detail: error instanceof SetupError ? error.message : errorSummary(error) });
       throw error;
     }
@@ -297,7 +322,7 @@ export class InteractionRouter {
       title: result === 'awarded' ? brandedTitle('Member verified', config.emoji) : 'Verification attempt',
       outcome: result, userId: interaction.user.id, channelId: interaction.channelId,
       discord: result !== 'cooldown' && result !== 'processing',
-      critical: result === 'awarded',
+      priority: result === 'awarded' ? 'important' : 'routine',
       ...(result === 'awarded' ? { roleId: config.verificationRoleId } : {}),
     });
     const [title, description] = verificationReplies[result];

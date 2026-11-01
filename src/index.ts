@@ -44,7 +44,7 @@ async function shutdown(reason: string, code: number): Promise<void> {
   activity.stop();
   const forcedExit = setTimeout(() => process.exit(code), 8_000);
   forcedExit.unref();
-  audit.record({ event: 'bot_stopping', title: 'dvc.services stopping', outcome: reason, critical: true });
+  audit.record({ event: 'bot_stopping', title: 'dvc.services stopping', outcome: reason, priority: 'critical' });
   try { await activity.flush(); await audit.flush(); }
   finally {
     await client.destroy();
@@ -76,7 +76,7 @@ async function initialise(readyClient: Client<true>): Promise<void> {
     detail: `Message ID: ${panel.id}` });
   if (stopping) return;
   operational = true;
-  audit.record({ event: 'bot_online', title: 'dvc.services online', outcome: 'ready', critical: true,
+  audit.record({ event: 'bot_online', title: 'dvc.services online', outcome: 'ready', priority: 'critical',
     detail: `v${VERSION} is ready in dvc.labs. Verification, member lookups, welcome DMs, and server activity logs are available.` });
 }
 
@@ -114,7 +114,7 @@ client.once(Events.ClientReady, readyClient => {
   void initialise(readyClient).catch(error => {
     const detail = error instanceof SetupError ? error.message : errorSummary(error);
     logger.write('error', 'startup_failed', { detail });
-    audit.record({ event: 'startup_failed', title: 'dvc.services startup failed', outcome: 'error', detail, critical: true });
+    audit.record({ event: 'startup_failed', title: 'dvc.services startup failed', outcome: 'error', detail, priority: 'critical' });
     void shutdown('startup_failed', 1);
   });
 });

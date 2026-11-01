@@ -23,3 +23,21 @@ test('authored GitHub links remain usable and the welcome includes the logging n
   assert.match(messageText(welcome), /Ordinary chat and incoming DMs are not archived/);
   assert.match(messageText(aboutCard(config, 10)), /\[loon.host\]\(https:\/\/loon.host\)/);
 });
+
+test('subtext markers, bidi controls, and single-slash schemes are neutralised', () => {
+  const text = displayText('-# subtext\n  -# indented\n\u202ereversed\u202c\u2066text\u2069 <https:/x>');
+  assert.match(text, /\\-# subtext/);
+  assert.match(text, /  \\-# indented/);
+  assert.equal(/[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/u.test(text), false);
+  assert.equal(text.includes('https:/'), false);
+});
+
+test('truncation by source code point preserves complete emojis and Markdown escape sequences', () => {
+  const emoji = displayText('x'.repeat(99) + '😀tail', 100);
+  assert.equal(Array.from(emoji).length, 100);
+  assert.ok(emoji.endsWith('😀'));
+  const markup = displayText('x'.repeat(97) + '*****', 100);
+  assert.ok(markup.endsWith('\\*\\*\\*'));
+  const slash = displayText('x'.repeat(99) + '\\tail', 100);
+  assert.equal((slash.match(/\\+$/)?.[0].length ?? 0) % 2, 0);
+});

@@ -47,7 +47,8 @@ For Discord-facing changes, manually test in the separate server:
 - Pending screening and invalid role hierarchy are handled safely.
 - `/about` works in the configured commands channel.
 - `/member user:@someone` works publicly for ordinary members without publishing sensitive pages. Staff details are ephemeral and require Manage Server or Moderate Members. Revoke that permission and confirm further private pages are denied. Verify snapshot expiry, no repeated member/profile fetches on page changes, shared API limits, and voice-channel redaction.
-- Hostile nicknames/statuses cannot create links, formatting, quotes, or mentions. Denied card clicks and join/DM bursts cannot displace critical verification/error logs.
+- Hostile nicknames/statuses cannot create links, subtext, formatting, quotes, or mentions. Check bidi removal and code-point truncation. Denied clicks, join/DM bursts, and success floods cannot displace failure/lifecycle records.
+- Known non-members get private replies before a public defer; expired cards ask for a fresh lookup. Test rare API failures after deferring separately.
 - A new human join is logged and receives the fixed welcome DM; disabled DMs are handled without a crash. Existing members receive no startup DMs.
 - Native Discord audit entries identify the actual actor and render role/member/channel references without notifications.
 - `/verification` requires Manage Server permission and reuses the panel.

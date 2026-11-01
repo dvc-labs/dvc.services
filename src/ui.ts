@@ -19,12 +19,17 @@ export const NO_MENTIONS = { parse: [] as never[], repliedUser: false };
 export function displayText(value: string, limit = 300): string {
   // Disable both formatting and linkification of member-controlled text. Authored links
   // and native mentions are constructed separately and never pass through this helper.
-  const plain = value.replace(/<(?=[@#])/g, '‹').replace(/@/g, '@\u200b')
-    .replace(/:\/\//g, ':\u200b//').replace(/\bwww\./gi, 'www\u200b.')
+  // Truncate the source by code point before adding escapes; never split a surrogate
+  // pair or an escape sequence. Rendered text can be longer than this source limit.
+  const source = Array.from(value.replace(/[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/gu, ''))
+    .slice(0, Math.max(0, limit)).join('');
+  const plain = source.replace(/<(?=[@#])/g, '‹').replace(/@/g, '@\u200b')
+    .replace(/:\//g, ':\u200b/').replace(/\bwww\./gi, 'www\u200b.')
     .replace(/\bdiscord\.(gg|com\/invite)/gi, 'discord\u200b.$1');
-  return escapeMarkdown(plain, { maskedLink: true, heading: true, bulletedList: true, numberedList: true })
-    .replace(/>/g, '\\>')
-    .slice(0, limit) || 'None';
+  const escaped = escapeMarkdown(plain, { maskedLink: true, heading: true, bulletedList: true, numberedList: true })
+    .replace(/^([ \t]*)-#(?=[ \t])/gm, '$1\\-#')
+    .replace(/>/g, '\\>');
+  return escaped || 'None';
 }
 
 export function brandedTitle(title: string, emoji: string): string {

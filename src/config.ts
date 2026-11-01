@@ -38,8 +38,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   if (!['debug', 'info', 'warn', 'error'].includes(logLevel)) {
     throw new SetupError('LOG_LEVEL must be debug, info, warn, or error.');
   }
-  const emojiValue = env.DVC_EMOJI?.trim() ?? DVC_EMOJI;
-  const emoji = !emojiValue || emojiValue.toLowerCase() === 'none' ? '' : emojiValue;
+  const emojiValue = env.DVC_EMOJI?.trim() || DVC_EMOJI;
+  const emoji = emojiValue.toLowerCase() === 'none' ? '' : emojiValue;
   const emojiMatch = /^<a?:[a-zA-Z0-9_]{2,32}:(\d{17,20})>$/.exec(emoji);
   if (emoji && (!emojiMatch || BigInt(emojiMatch[1]!) > 18_446_744_073_709_551_615n)) {
     throw new SetupError('DVC_EMOJI must be a custom emoji such as <:dvc:1566457051465388194>, or none.');

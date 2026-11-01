@@ -85,6 +85,24 @@ test('public reports never reveal private voice-channel IDs even if the caller c
   assert.ok(JSON.stringify(publicReport).includes('<#999999999999999999>'));
 });
 
+test('activities that expand during escaping are fully paginated within V2 limits', () => {
+  const f = fixture();
+  f.member.presence = { status: 'online', clientStatus: {}, activities: Array.from({ length: 20 }, (_, index) => ({
+    name: `Activity ${index} ${'*'.repeat(300)}`, details: '>'.repeat(300), state: '😀'.repeat(300), type: ActivityType.Playing,
+  })) };
+  const report = f.report();
+  const text: string[] = [];
+  for (let i = 0; i < report.pages.length; i++) {
+    const payload = memberCard(report, '888888888888888888', i, { staff: true });
+    payload.components.forEach(component => component.toJSON());
+    const rendered = messageText(payload);
+    assert.ok(rendered.length < 4_000);
+    assert.equal(rendered.includes('Further details are available'), false);
+    text.push(rendered);
+  }
+  for (let i = 0; i < 20; i++) assert.ok(text.join('\n').includes(`Activity ${i} `));
+});
+
 test('member lookup fetches only the requested account and refreshes public user profile data', async () => {
   const f = fixture();
   const calls: unknown[] = [];

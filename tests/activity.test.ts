@@ -173,7 +173,7 @@ test('a 60-member join burst and DM results cannot displace a later verification
     id: (777777777777777777n + BigInt(i)).toString(),
   } as unknown as GuildMember);
   await f.activity.flush();
-  f.audit.record({ event: 'verification_failed', title: 'Verification failed', outcome: 'error', critical: true });
+  f.audit.record({ event: 'verification_failed', title: 'Verification failed', outcome: 'error', priority: 'critical' });
   release();
   await f.audit.flush();
   assert.equal(f.events.filter(event => event.event === 'member_joined').length, 60);

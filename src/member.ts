@@ -81,14 +81,15 @@ export function buildMemberReport(member: GuildMember, user: User, config: Confi
       activity.state && displayText(activity.state, 150)].filter(Boolean).join(' — ');
     return `${humanise(ActivityType[activity.type] ?? 'Activity')}: ${details}`;
   }) ?? [];
+  const activityChunks = splitValues(activities);
   addPage('Presence and voice', [
     { name: 'Presence', value: presence ? humanise(presence.status) : 'Not observed — may be offline, invisible, or outside the bounded cache' },
     { name: 'Devices', value: presence?.clientStatus ? Object.entries(presence.clientStatus)
       .map(([device, status]) => `${humanise(device)}: ${humanise(status)}`).join(' · ') || 'Not observed' : 'Not observed' },
-    { name: 'Current activities', value: activities.slice(0, 5).join('\n') || 'None observed' },
+    { name: 'Current activities', value: activities.length ? activityChunks[0]! : 'None observed' },
     { name: 'Voice channel', value: member.voice.channelId
       ? member.voice.channel?.permissionsFor(member.guild.roles.everyone)?.has(PermissionFlagsBits.ViewChannel)
-        ? channelMention(member.voice.channelId) : 'Connected — channel details omitted from public reports'
+        ? channelMention(member.voice.channelId) : 'Connected — restricted channel details omitted'
       : 'Not connected' },
     { name: 'Voice status', value: member.voice.channelId
       ? `Server muted: ${yesNo(member.voice.serverMute)} · Server deafened: ${yesNo(member.voice.serverDeaf)}\n`
@@ -97,8 +98,8 @@ export function buildMemberReport(member: GuildMember, user: User, config: Confi
       : 'Not connected' },
   ], true);
   // Additional activities get their own pages instead of silently dropping available data.
-  splitValues(activities.slice(5)).forEach(value => {
-    if (value !== 'None') addPage('More activities', [{ name: 'Current activities', value }], true);
+  activityChunks.slice(1).forEach(value => {
+    addPage('More activities', [{ name: 'Current activities', value }], true);
   });
   const primary = user.primaryGuild;
   addPage('Profile and appearance', [

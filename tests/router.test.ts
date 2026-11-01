@@ -51,7 +51,8 @@ function fixture(kind: 'command' | 'button' | 'modal' = 'button') {
     user: { id: 'member' }, message: { id: 'panel', author: { id: 'bot' } },
     customId: kind === 'modal' ? 'dvc:verify:form:v1:member:panel' : VERIFY_CUSTOM_ID,
     commandName: 'about', memberPermissions: new PermissionsBitField(),
-    options: { getUser: () => ({ id: '777777777777777777' }) },
+    resolvedMember: { id: '777777777777777777' } as { id: string } | null,
+    options: { getUser: () => ({ id: '777777777777777777' }), getMember: () => raw.resolvedMember },
     deferred: false, replied: false, ephemeral: null as boolean | null, sourceEphemeral: false, responseId: 'reply-0',
     isChatInputCommand: () => raw.kind === 'command', isButton: () => raw.kind === 'button',
     isModalSubmit: () => raw.kind === 'modal',
@@ -92,6 +93,7 @@ test('trusted button defers privately before fetching and awards only the clicki
   assert.deepEqual(f.awarded, ['member']);
   assert.deepEqual(f.replies[0], { flags: MessageFlags.Ephemeral });
   assert.equal(f.events[0]!.event, 'verification_succeeded');
+  assert.equal(f.events[0]!.priority, 'important');
   assert.equal(f.events[0]!.roleId, 'member-role');
 });
 
@@ -195,10 +197,25 @@ test('missing member and lookup failures produce generic guidance without exposi
     assert.equal(f.events[0]!.outcome, missing ? 'member_not_found' : 'error');
     assert.deepEqual(f.deleted, ['reply-1']);
     assert.equal((f.replies.at(-1) as { flags: number }).flags & MessageFlags.Ephemeral, MessageFlags.Ephemeral);
-    assert.equal(messageText(f.replies[1]), '\u200b'); // Finish the public defer without exposing the failure.
+    assert.match(messageText(f.replies[1]), /Lookup finished/);
+    assert.equal(messageText(f.replies[1]).includes('Member not found'), false);
     assert.equal(JSON.stringify(f.replies).includes('private request body'), false);
     assert.equal(JSON.stringify(f.logs).includes('private request body'), false);
   }
+});
+
+test('a resolved non-member is rejected privately before deferring or fetching any profile', async () => {
+  const f = fixture('command');
+  f.raw.commandName = 'member'; f.raw.resolvedMember = null;
+  let reads = 0;
+  f.deps.memberReport = async () => { reads++; return lookup; };
+  await f.run();
+  assert.equal(reads, 0);
+  assert.equal(f.raw.deferred, false);
+  assert.equal(f.deleted.length, 0);
+  assert.equal(f.replies.length, 1);
+  assert.equal((f.replies[0] as { flags: number }).flags & MessageFlags.Ephemeral, MessageFlags.Ephemeral);
+  assert.match(messageText(f.replies[0]), /Member not found/);
 });
 
 test('failure handling does not risk a public follow-up if completing the original defer fails', async () => {
@@ -222,7 +239,21 @@ test('expired snapshots ask for a new lookup without performing another API requ
   await f.run();
   assert.equal(reads, 0);
   assert.equal(f.raw.deferred, false);
-  assert.match(messageText(f.replies[0]), /open your own lookup/);
+  assert.match(messageText(f.replies[0]), /This card has expired/);
+  assert.match(messageText(f.replies[0]), /Run \/member again/);
+});
+
+test('staff opening details on an expired card also get specific refresh guidance', async () => {
+  const f = await lookupFixture();
+  f.advance(120_000);
+  f.raw.customId = memberDetailsId(f.raw.user.id, lookup.userId);
+  f.raw.memberPermissions = new PermissionsBitField(PermissionFlagsBits.ManageGuild);
+  let reads = 0;
+  f.deps.memberReport = async () => { reads++; return lookup; };
+  await f.run();
+  assert.equal(reads, 0);
+  assert.equal(f.raw.deferred, false);
+  assert.match(messageText(f.replies[0]), /This card has expired/);
 });
 
 test('private staff details require Manage Server or Moderate Members and are never posted publicly', async () => {
@@ -328,6 +359,7 @@ test('a failed role write produces failure logs and no success event', async () 
   f.gateway.addRole = async () => { throw new Error('private token must not be logged'); };
   await f.run();
   assert.deepEqual(f.events.map(event => event.event), ['verification_failed']);
+  assert.equal(f.events[0]!.priority, 'critical');
   assert.equal(f.events[0]!.detail, 'Error');
   assert.equal(JSON.stringify(f.logs).includes('private token'), false);
   assert.equal(JSON.stringify(f.replies).includes('private token'), false);

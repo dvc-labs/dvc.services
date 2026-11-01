@@ -16,11 +16,12 @@ export interface AuditEvent {
   detail?: string;
   // Defaults to true; false retains the console copy without queueing a Discord post.
   discord?: boolean;
-  // Critical records can use reserved capacity and are sent ahead of routine records.
-  critical?: boolean;
+  // Successes have reserved capacity, but cannot consume failure/lifecycle slots.
+  priority?: 'routine' | 'important' | 'critical';
 }
 
 export type AuditSink = (event: AuditEvent) => Promise<void>;
+const priorityRank = (event: AuditEvent): number => event.priority === 'critical' ? 2 : event.priority === 'important' ? 1 : 0;
 
 export function discordAuditSink(channel: TextChannel): AuditSink {
   return async event => {
@@ -54,21 +55,28 @@ export class AuditLog {
       context: event.fields?.map(field => `${field.name}: ${field.value}`).join(' | '),
     });
     if (!this.sink || event.discord === false) return;
-    if (!event.critical && this.queue.length >= 80) {
+    const rank = priorityRank(event);
+    const nonCritical = this.queue.filter(queued => priorityRank(queued) < 2).length;
+    const routine = this.queue.filter(queued => priorityRank(queued) === 0).length;
+    if (rank === 0 && (routine >= 60 || nonCritical >= 80 || this.queue.length >= 100)) {
       this.logger.write('warn', 'audit_queue_full', { outcome: 'Discord copy dropped; console copy retained' });
       return;
     }
-    if (this.queue.length >= 100) {
-      const routine = this.queue.findIndex(queued => !queued.critical);
-      if (routine === -1) {
+    if (this.queue.length >= 100 || (rank === 1 && nonCritical >= 80)) {
+      // Evict the oldest record from the lowest available tier, never a peer or higher tier.
+      let replace = -1;
+      for (let tier = 0; tier < rank && replace === -1; tier++) {
+        replace = this.queue.findIndex(queued => priorityRank(queued) === tier);
+      }
+      if (replace === -1) {
         this.logger.write('warn', 'audit_queue_full', { outcome: 'Discord copy dropped; console copy retained' });
         return;
       }
-      this.queue.splice(routine, 1);
-      this.logger.write('warn', 'audit_routine_evicted', { outcome: 'Critical record retained; routine console copy retained' });
+      this.queue.splice(replace, 1);
+      this.logger.write('warn', 'audit_lower_priority_evicted', { outcome: 'Higher-priority record retained; console copies retained' });
     }
-    const firstRoutine = this.queue.findIndex(queued => !queued.critical);
-    if (event.critical && firstRoutine !== -1) this.queue.splice(firstRoutine, 0, event);
+    const firstLower = this.queue.findIndex(queued => priorityRank(queued) < rank);
+    if (firstLower !== -1) this.queue.splice(firstLower, 0, event);
     else this.queue.push(event);
     this.startDrain();
   }

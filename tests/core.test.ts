@@ -131,7 +131,8 @@ test('login hints are limited to DisallowedIntents errors and close code 4014', 
 test('test deployments can select another application emoji or disable branding', () => {
   assert.equal(loadConfig({ ...environment(), DVC_EMOJI: '<:test:777777777777777777>' }).emoji, '<:test:777777777777777777>');
   assert.equal(loadConfig({ ...environment(), DVC_EMOJI: 'none' }).emoji, '');
-  assert.equal(loadConfig({ ...environment(), DVC_EMOJI: '' }).emoji, '');
+  assert.equal(loadConfig({ ...environment(), DVC_EMOJI: '' }).emoji, loadConfig(environment()).emoji);
+  assert.equal(loadConfig({ ...environment(), DVC_EMOJI: '   ' }).emoji, loadConfig(environment()).emoji);
   assert.throws(() => loadConfig({ ...environment(), DVC_EMOJI: '[bad](https://example.com)' }), /DVC_EMOJI/);
   const panel = verificationPanel('');
   assert.equal(JSON.stringify(panel).includes('1566457051465388194'), false);
