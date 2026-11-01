@@ -15,18 +15,18 @@ npm run check
 npm run dev
 ```
 
-Configure guild installation with the `bot` and `applications.commands` scopes. Give the bot access to the configured channels and place its role above the ordinary verification role. Keep all privileged intents off. Do not commit `.env`, tokens, raw error objects, or private logs.
+Configure guild installation with the `bot` and `applications.commands` scopes. Give the bot access to the configured channels, Read Message History, and View Audit Log; place its role above the ordinary verification role. Enable the Presence, Server Members, and Message Content privileged intents for the all-intents configuration. Do not commit `.env`, tokens, raw error objects, or private logs.
 
 ## Changes
 
 - Branch from current `main`, using a short name such as `fix/verification-retry` or `feat/status-command`.
 - Keep changes scoped to one problem. Explain the trigger and resulting behavior in the pull request.
 - Use TypeScript with strict typing, two-space indentation, single quotes, and ESM `.js` import specifiers.
-- Preserve the `#26bcc5` brand colour and concise, readable Discord embeds.
+- Preserve the `#26bcc5` brand colour, application emoji, and concise Components V2 cards. V2 messages cannot contain legacy embeds/content. Keep old and nested V2 panel discovery working across restarts.
 - Keep Discord-specific code at the edges. Verification and panel policy should remain testable without a token or live server.
 - Validate guild/channel/permission boundaries before taking action. A command's default permissions do not replace runtime authorization checks.
 - Acknowledge interactions promptly; defer before network-dependent work. Do not let logging failures change a successful role-award result.
-- Keep caches, queues, and rate-limit state bounded. Avoid introducing a database, privileged intent, heavy dependency, or host-specific integration without discussing the need.
+- Keep caches, queues, and rate-limit state bounded. Review intent/dependency changes and avoid adding heavy dependencies, persistence, or host-specific integrations without discussing the need.
 - Update `.env.example`, README tables, and deployment/setup guides when behavior or configuration changes.
 - Commit `package-lock.json` for dependency changes. Do not commit `node_modules`, `dist`, credentials, or generated logs.
 
@@ -46,6 +46,9 @@ For Discord-facing changes, manually test in the separate server:
 - Repeated clicks do not cause duplicate awards; already verified members get an acknowledgement.
 - Pending screening and invalid role hierarchy are handled safely.
 - `/about` works in the configured commands channel.
+- `/member user:@someone` works publicly for ordinary members, and another person cannot change the requester's pages. Verify per-user and shared API limits and private voice-channel redaction.
+- A new human join is logged and receives the fixed welcome DM; disabled DMs are handled without a crash. Existing members receive no startup DMs.
+- Native Discord audit entries identify the actual actor and render role/member/channel references without notifications.
 - `/verification` requires Manage Server permission and reuses the panel.
 - Restarting keeps a usable panel without adding another.
 - Discord and console logs show correct outcomes without secrets or message content.

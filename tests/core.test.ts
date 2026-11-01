@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
-import { PermissionFlagsBits, PermissionsBitField } from 'discord.js';
+import { GatewayIntentBits, IntentsBitField, MessageFlags, PermissionFlagsBits, PermissionsBitField } from 'discord.js';
+import { ALL_GATEWAY_INTENTS, clientOptions } from '../src/client-options.js';
 import { commands } from '../src/commands.js';
 import { loadConfig } from '../src/config.js';
 import { errorSummary } from '../src/logger.js';
-import { assertSafeVerificationRole, Cooldown, isTrustedVerificationButton, VERIFY_CUSTOM_ID } from '../src/policy.js';
+import { assertSafeVerificationRole, Cooldown, hasVerificationButton, isTrustedVerificationButton, VERIFY_CUSTOM_ID } from '../src/policy.js';
 import { verificationPanel } from '../src/ui.js';
 import { BRAND_COLOR, VERSION } from '../src/version.js';
 
@@ -90,16 +91,34 @@ test('panel command requires Manage Server by default', () => {
   const definitions = commands.map(command => command.toJSON());
   assert.equal(definitions.find(command => command.name === 'verification')!.default_member_permissions,
     PermissionFlagsBits.ManageGuild.toString());
+  assert.equal(definitions.find(command => command.name === 'member')!.default_member_permissions ?? null, null);
 });
 
 test('branding, persistent button ID, and package version remain consistent', () => {
   const panel = verificationPanel();
-  assert.equal(panel.embeds[0]!.toJSON().color, 0x26bcc5);
+  assert.equal(panel.components[0]!.toJSON().accent_color, 0x26bcc5);
+  assert.equal(panel.flags, MessageFlags.IsComponentsV2);
   assert.equal(BRAND_COLOR, 0x26bcc5);
-  const button = panel.components[0]!.toJSON().components[0]!;
-  assert.ok('custom_id' in button);
-  assert.equal(button.custom_id, VERIFY_CUSTOM_ID);
+  assert.equal(hasVerificationButton(panel.components.map(component => component.toJSON())), true);
   assert.equal(VERSION, JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version);
+});
+
+test('panel discovery recognises legacy rows and nested V2 buttons without matching other components', () => {
+  const button = { type: 2, custom_id: VERIFY_CUSTOM_ID };
+  assert.equal(hasVerificationButton([{ type: 1, components: [button] }]), true);
+  assert.equal(hasVerificationButton([{ type: 17, components: [{ type: 1, components: [button] }] }]), true);
+  assert.equal(hasVerificationButton([{ type: 10, content: VERIFY_CUSTOM_ID }]), false);
+  assert.equal(hasVerificationButton([{ type: 2, custom_id: 'unrelated' }]), false);
+});
+
+test('all supported intents are enabled and mention parsing is disabled', () => {
+  const intents = new IntentsBitField(ALL_GATEWAY_INTENTS);
+  for (const value of Object.values(GatewayIntentBits)) {
+    if (typeof value === 'number') assert.equal(intents.has(value), true);
+  }
+  const options = clientOptions();
+  assert.deepEqual(options.allowedMentions, { parse: [], repliedUser: false });
+  assert.ok(options.makeCache);
 });
 
 test('error diagnostics exclude tokens, request data, and raw error text', () => {

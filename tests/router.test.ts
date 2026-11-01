@@ -5,9 +5,11 @@ import { AuditLog, type AuditEvent } from '../src/audit.js';
 import type { Config } from '../src/config.js';
 import { SetupError } from '../src/errors.js';
 import { Logger } from '../src/logger.js';
+import { memberNavigationId, type MemberReport } from '../src/member.js';
 import { VERIFY_CUSTOM_ID } from '../src/policy.js';
 import { InteractionRouter, type RouterDependencies } from '../src/router.js';
 import { VerificationService, type VerificationGateway } from '../src/verification.js';
+import { messageText } from './helpers.js';
 
 function fixture(kind: 'command' | 'button' | 'modal' = 'button') {
   const config: Config = {
@@ -35,6 +37,7 @@ function fixture(kind: 'command' | 'button' | 'modal' = 'button') {
   const deps: RouterDependencies = {
     config, audit, logger, botId: () => 'bot', isReady: () => ready, panelId: () => panelId,
     verification: () => verification,
+    memberReport: async () => { throw new Error('Unexpected member lookup'); },
     refreshPanel: async () => { refreshes++; return { id: 'panel', created: false }; },
   };
   const router = new InteractionRouter(deps);
@@ -44,11 +47,13 @@ function fixture(kind: 'command' | 'button' | 'modal' = 'button') {
     user: { id: 'member' }, message: { id: 'panel', author: { id: 'bot' } },
     customId: kind === 'modal' ? 'dvc:verify:form:v1:member:panel' : VERIFY_CUSTOM_ID,
     commandName: 'about', memberPermissions: new PermissionsBitField(),
+    options: { getUser: () => ({ id: '777777777777777777' }) },
     deferred: false, replied: false,
     isChatInputCommand: () => raw.kind === 'command', isButton: () => raw.kind === 'button',
     isModalSubmit: () => raw.kind === 'modal',
     async reply(payload: unknown) { raw.replied = true; replies.push(payload); },
     async deferReply(payload: unknown) { raw.deferred = true; replies.push(payload); },
+    async deferUpdate() { raw.deferred = true; replies.push({ deferUpdate: true }); },
     async editReply(payload: unknown) { replies.push(payload); },
   };
   return { raw, events, awarded, replies, logs, gateway, audit, deps, refreshes: () => refreshes,
@@ -69,6 +74,95 @@ test('trusted button defers privately before fetching and awards only the clicki
   assert.deepEqual(f.replies[0], { flags: MessageFlags.Ephemeral });
   assert.equal(f.events[0]!.event, 'verification_succeeded');
   assert.equal(f.events[0]!.roleId, 'member-role');
+});
+
+const lookup: MemberReport = {
+  userId: '777777777777777777', thumbnail: 'https://cdn.discordapp.com/embed/avatars/0.png',
+  pages: [{ title: 'Overview', fields: [{ name: 'Member', value: '<@777777777777777777>' }] },
+    { title: 'Permissions', fields: [{ name: 'Permissions', value: 'View channel' }] }],
+};
+
+test('member command is public for ordinary members and audits the caller and target separately', async () => {
+  const f = fixture('command');
+  f.raw.commandName = 'member';
+  f.raw.user.id = '888888888888888888';
+  f.deps.memberReport = async userId => {
+    assert.equal(f.raw.deferred, true);
+    assert.equal(userId, lookup.userId);
+    return lookup;
+  };
+  await f.run();
+  assert.deepEqual(f.replies[0], {});
+  assert.equal((f.replies[1] as { flags: number }).flags & MessageFlags.Ephemeral, 0);
+  assert.match(messageText(f.replies[1]), /<@777777777777777777>/);
+  assert.equal(f.events[0]!.userId, '888888888888888888');
+  assert.equal(f.events[0]!.targetUserId, lookup.userId);
+  assert.equal(f.events[0]!.outcome, 'success');
+});
+
+test('member lookup cannot run in another guild/channel or during startup', async () => {
+  for (const change of ['guild', 'channel', 'not_ready']) {
+    const f = fixture('command');
+    f.raw.commandName = 'member';
+    if (change === 'guild') f.raw.guildId = 'elsewhere';
+    if (change === 'channel') f.raw.channelId = 'elsewhere';
+    if (change === 'not_ready') f.setReady(false);
+    let reads = 0;
+    f.deps.memberReport = async () => { reads++; return lookup; };
+    await f.run();
+    assert.equal(reads, 0);
+    assert.equal(f.raw.deferred, false);
+    assert.equal((f.replies[0] as { flags: number }).flags & MessageFlags.Ephemeral, MessageFlags.Ephemeral);
+  }
+});
+
+test('member page buttons recheck ownership, guild, channel, and bot authorship before reading', async () => {
+  for (const change of ['owner', 'guild', 'channel', 'author', 'malformed', 'not_ready']) {
+    const f = fixture();
+    f.raw.user.id = '888888888888888888';
+    f.raw.channelId = 'commands';
+    f.raw.customId = memberNavigationId(f.raw.user.id, lookup.userId, 1);
+    if (change === 'owner') f.raw.user.id = '999999999999999999';
+    if (change === 'guild') f.raw.guildId = 'elsewhere';
+    if (change === 'channel') f.raw.channelId = 'elsewhere';
+    if (change === 'author') f.raw.message.author.id = 'someone';
+    if (change === 'malformed') f.raw.customId += ':invalid';
+    if (change === 'not_ready') f.setReady(false);
+    let reads = 0;
+    f.deps.memberReport = async () => { reads++; return lookup; };
+    await f.run();
+    assert.equal(reads, 0);
+    assert.equal(f.raw.deferred, false);
+  }
+});
+
+test('member navigation works for ordinary members and refreshes only the requested target', async () => {
+  const f = fixture();
+  f.raw.user.id = '888888888888888888';
+  f.raw.channelId = 'commands';
+  f.raw.customId = memberNavigationId(f.raw.user.id, lookup.userId, 1);
+  let reads = 0;
+  f.deps.memberReport = async userId => { assert.equal(userId, lookup.userId); reads++; return lookup; };
+  await f.run();
+  assert.equal(reads, 1);
+  assert.deepEqual(f.replies[0], { deferUpdate: true });
+  assert.match(messageText(f.replies[1]), /Member · Permissions/);
+  assert.equal(f.events.length, 0); // Page navigation is console-only.
+});
+
+test('missing member and lookup failures produce generic guidance without exposing API error bodies', async () => {
+  for (const missing of [true, false]) {
+    const f = fixture('command');
+    f.raw.commandName = 'member';
+    f.deps.memberReport = async () => {
+      if (missing) return null;
+      throw new Error('private request body');
+    };
+    await f.run();
+    assert.equal(f.events[0]!.outcome, missing ? 'member_not_found' : 'error');
+    assert.equal(JSON.stringify(f.replies).includes('private request body'), false);
+    assert.equal(JSON.stringify(f.logs).includes('private request body'), false);
+  }
 });
 
 test('already verified, screening-pending, and bot members receive private replies without role writes', async () => {
@@ -245,12 +339,14 @@ test('command channel restriction applies before panel updates', async () => {
   assert.equal(f.raw.replied, true);
 });
 
-test('about sends its public embed and records command use', async () => {
+test('about sends its public V2 card and records command use', async () => {
   const f = fixture('command');
   await f.run();
   assert.equal(f.events[0]!.command, 'about');
   assert.equal(f.events[0]!.outcome, 'success');
-  const payload = f.replies[0] as { flags?: number; embeds: unknown[] };
-  assert.equal(payload.flags, undefined);
-  assert.equal(payload.embeds.length, 1);
+  const payload = f.replies[0] as { flags: number; components: unknown[]; embeds?: unknown[] };
+  assert.equal(payload.flags, MessageFlags.IsComponentsV2);
+  assert.equal(payload.embeds, undefined);
+  assert.equal(payload.components.length, 1);
+  assert.match(messageText(payload), /loon.host/);
 });
