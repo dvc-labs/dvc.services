@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
-import { PermissionFlagsBits, PermissionsBitField } from 'discord.js';
+import { GatewayIntentBits, IntentsBitField, MessageFlags, PermissionFlagsBits, PermissionsBitField } from 'discord.js';
+import { REQUIRED_GATEWAY_INTENTS, clientOptions, intentFailureHint } from '../src/client-options.js';
 import { commands } from '../src/commands.js';
 import { loadConfig } from '../src/config.js';
 import { errorSummary } from '../src/logger.js';
-import { assertSafeVerificationRole, Cooldown, isTrustedVerificationButton, VERIFY_CUSTOM_ID } from '../src/policy.js';
+import { assertSafeVerificationRole, Cooldown, hasVerificationButton, isTrustedVerificationButton, VERIFY_CUSTOM_ID } from '../src/policy.js';
 import { verificationPanel } from '../src/ui.js';
 import { BRAND_COLOR, VERSION } from '../src/version.js';
 
@@ -90,16 +91,52 @@ test('panel command requires Manage Server by default', () => {
   const definitions = commands.map(command => command.toJSON());
   assert.equal(definitions.find(command => command.name === 'verification')!.default_member_permissions,
     PermissionFlagsBits.ManageGuild.toString());
+  assert.equal(definitions.find(command => command.name === 'member')!.default_member_permissions ?? null, null);
 });
 
 test('branding, persistent button ID, and package version remain consistent', () => {
   const panel = verificationPanel();
-  assert.equal(panel.embeds[0]!.toJSON().color, 0x26bcc5);
+  assert.equal(panel.components[0]!.toJSON().accent_color, 0x26bcc5);
+  assert.equal(panel.flags, MessageFlags.IsComponentsV2);
   assert.equal(BRAND_COLOR, 0x26bcc5);
-  const button = panel.components[0]!.toJSON().components[0]!;
-  assert.ok('custom_id' in button);
-  assert.equal(button.custom_id, VERIFY_CUSTOM_ID);
+  assert.equal(hasVerificationButton(panel.components.map(component => component.toJSON())), true);
   assert.equal(VERSION, JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version);
+});
+
+test('panel discovery recognises legacy rows and nested V2 buttons without matching other components', () => {
+  const button = { type: 2, custom_id: VERIFY_CUSTOM_ID };
+  assert.equal(hasVerificationButton([{ type: 1, components: [button] }]), true);
+  assert.equal(hasVerificationButton([{ type: 17, components: [{ type: 1, components: [button] }] }]), true);
+  assert.equal(hasVerificationButton([{ type: 10, content: VERIFY_CUSTOM_ID }]), false);
+  assert.equal(hasVerificationButton([{ type: 2, custom_id: 'unrelated' }]), false);
+});
+
+test('only the five used intents are requested and message content is excluded', () => {
+  const intents = new IntentsBitField(REQUIRED_GATEWAY_INTENTS);
+  assert.equal(intents.bitfield, 391);
+  assert.equal(intents.has(GatewayIntentBits.MessageContent), false);
+  assert.equal(intents.has(GatewayIntentBits.DirectMessages), false);
+  const options = clientOptions();
+  assert.deepEqual(options.allowedMentions, { parse: [], repliedUser: false });
+  assert.ok(options.makeCache);
+});
+
+test('login hints are limited to DisallowedIntents errors and close code 4014', () => {
+  for (const code of ['DisallowedIntents', 4014]) assert.match(intentFailureHint({ code })!, /Server Members and Presence/);
+  for (const error of [{ code: 'TokenInvalid' }, { code: 4004 }, new Error('Used disallowed intents'), null, 'secret']) {
+    assert.equal(intentFailureHint(error), undefined);
+  }
+});
+
+test('test deployments can select another application emoji or disable branding', () => {
+  assert.equal(loadConfig({ ...environment(), DVC_EMOJI: '<:test:777777777777777777>' }).emoji, '<:test:777777777777777777>');
+  assert.equal(loadConfig({ ...environment(), DVC_EMOJI: 'none' }).emoji, '');
+  assert.equal(loadConfig({ ...environment(), DVC_EMOJI: '' }).emoji, loadConfig(environment()).emoji);
+  assert.equal(loadConfig({ ...environment(), DVC_EMOJI: '   ' }).emoji, loadConfig(environment()).emoji);
+  assert.throws(() => loadConfig({ ...environment(), DVC_EMOJI: '[bad](https://example.com)' }), /DVC_EMOJI/);
+  const panel = verificationPanel('');
+  assert.equal(JSON.stringify(panel).includes('1566457051465388194'), false);
+  assert.equal(JSON.stringify(verificationPanel('<:test:777777777777777777>')).includes('"id":"777777777777777777"'), true);
 });
 
 test('error diagnostics exclude tokens, request data, and raw error text', () => {

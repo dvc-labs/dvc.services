@@ -1,7 +1,20 @@
 import { SetupError } from './errors.js';
-import { PermissionFlagsBits, PermissionsBitField } from 'discord.js';
+import { ComponentType, PermissionFlagsBits, PermissionsBitField } from 'discord.js';
 
 export const VERIFY_CUSTOM_ID = 'dvc:verify:v1';
+export const MEMBER_CUSTOM_ID_PREFIX = 'dvc:member:v1:';
+export const VERIFICATION_AUDIT_REASON = 'dvc.services: member completed button verification';
+
+// Supports both the old action row and the nested action row in a V2 container.
+export function hasVerificationButton(components: readonly unknown[]): boolean {
+  return components.some(component => {
+    if (!component || typeof component !== 'object') return false;
+    if ('type' in component && component.type === ComponentType.Button
+      && 'custom_id' in component && component.custom_id === VERIFY_CUSTOM_ID) return true;
+    return 'components' in component && Array.isArray(component.components)
+      && hasVerificationButton(component.components);
+  });
+}
 
 interface VerificationContext {
   guildId: string | null;

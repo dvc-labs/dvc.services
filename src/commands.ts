@@ -5,6 +5,9 @@ export const commands = [
   new SlashCommandBuilder().setName('verification')
     .setDescription('Create or refresh the server verification panel.')
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
+  new SlashCommandBuilder().setName('member')
+    .setDescription('Inspect a server member’s profile, roles, permissions, and current status.')
+    .addUserOption(option => option.setName('user').setDescription('The server member to look up.').setRequired(true)),
 ];
 
 export async function syncCommands(guild: Guild): Promise<boolean> {
