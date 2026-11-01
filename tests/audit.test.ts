@@ -6,7 +6,7 @@ import { AuditLog, discordAuditSink, type AuditEvent } from '../src/audit.js';
 import { Logger } from '../src/logger.js';
 import { messageText } from './helpers.js';
 
-const event: AuditEvent = { event: 'verification_succeeded', title: 'Member verified', outcome: 'awarded' };
+const event: AuditEvent = { event: 'verification_succeeded', title: 'Member verified', outcome: 'awarded', critical: true };
 
 test('Discord verification logs resolve member, channel, and role references without enabling pings', async () => {
   const sent: { flags: number; components: unknown[]; allowedMentions: { parse: string[]; repliedUser: boolean } }[] = [];
@@ -73,6 +73,41 @@ test('Discord log queue is bounded during an outage or rate limit', async () => 
   release();
   await audit.flush();
   assert.equal(sent, 101); // One in flight plus 100 waiting.
+});
+
+test('routine bursts cannot consume reserved verification capacity and critical records are delivered first', async () => {
+  const logger = new Logger('error', '');
+  logger.write = () => {};
+  const audit = new AuditLog(logger);
+  const delivered: AuditEvent[] = [];
+  let release!: () => void;
+  const blocked = new Promise<void>(resolve => { release = resolve; });
+  audit.setSink(async value => { await blocked; delivered.push(value); });
+  for (let i = 0; i < 200; i++) audit.record({ event: 'member_joined', title: 'Member joined', outcome: 'joined' });
+  const failure = { event: 'verification_failed', title: 'Verification failed', outcome: 'error', critical: true };
+  audit.record(failure);
+  release();
+  await audit.flush();
+  assert.equal(delivered.length, 82); // One in flight, 80 routine records, one critical record.
+  assert.deepEqual(delivered[1], failure);
+});
+
+test('a full mixed queue evicts a routine record to retain a later critical error', async () => {
+  const logger = new Logger('error', '');
+  logger.write = () => {};
+  const audit = new AuditLog(logger);
+  const delivered: AuditEvent[] = [];
+  let release!: () => void;
+  const blocked = new Promise<void>(resolve => { release = resolve; });
+  audit.setSink(async value => { await blocked; delivered.push(value); });
+  for (let i = 0; i < 81; i++) audit.record({ event: 'member_joined', title: 'Member joined', outcome: 'joined' });
+  for (let i = 0; i < 20; i++) audit.record(event);
+  audit.record({ ...event, event: 'verification_failed', outcome: 'error' });
+  release();
+  await audit.flush();
+  assert.equal(delivered.length, 101);
+  assert.equal(delivered.filter(value => value.critical).length, 21);
+  assert.ok(delivered.some(value => value.event === 'verification_failed'));
 });
 
 test('explicit console-only events cannot displace Discord audit events during a backlog', async () => {

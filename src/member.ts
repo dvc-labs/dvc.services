@@ -4,11 +4,10 @@ import {
 } from 'discord.js';
 import type { Config } from './config.js';
 import { MEMBER_CUSTOM_ID_PREFIX } from './policy.js';
-import { card, discordTime, displayText, humanise, type CardField } from './ui.js';
-import { DVC_EMOJI } from './version.js';
+import { brandedTitle, card, discordTime, displayText, humanise, type CardField } from './ui.js';
 
-export interface MemberPage { title: string; fields: CardField[] }
-export interface MemberReport { userId: string; thumbnail: string; pages: MemberPage[] }
+export interface MemberPage { title: string; fields: CardField[]; staffOnly?: boolean }
+export interface MemberReport { userId: string; thumbnail: string; pages: MemberPage[]; emoji?: string }
 
 function splitValues(values: string[], limit = 1_800): string[] {
   if (!values.length) return ['None'];
@@ -30,15 +29,15 @@ function profileLink(label: string, url: string | null | undefined): string {
 export function buildMemberReport(member: GuildMember, user: User, config: Config): MemberReport {
   const pages: MemberPage[] = [];
   // Split by rendered length, not role count: even a 250-role member stays within V2 limits.
-  function addPage(title: string, fields: CardField[]): void {
+  function addPage(title: string, fields: CardField[], staffOnly = false): void {
     let part: CardField[] = [];
     let length = 0;
     for (const field of fields) {
       const size = field.name.length + field.value.length + 8;
-      if (part.length && length + size > 2_400) { pages.push({ title, fields: part }); part = []; length = 0; }
+      if (part.length && length + size > 2_400) { pages.push({ title, fields: part, staffOnly }); part = []; length = 0; }
       part.push(field); length += size;
     }
-    if (part.length) pages.push({ title, fields: part });
+    if (part.length) pages.push({ title, fields: part, staffOnly });
   }
 
   addPage('Overview', [
@@ -51,17 +50,19 @@ export function buildMemberReport(member: GuildMember, user: User, config: Confi
     { name: 'Account created', value: discordTime(user.createdTimestamp) },
     { name: 'Joined dvc.labs', value: discordTime(member.joinedTimestamp) },
     { name: 'Verification', value: member.roles.cache.has(config.verificationRoleId) ? `Has ${roleMention(config.verificationRoleId)}` : 'Not verified' },
-    { name: 'Rules screening', value: member.pending ? 'Pending' : 'No pending screening' },
   ]);
   addPage('Server membership', [
     { name: 'Server owner', value: yesNo(member.guild.ownerId === user.id) },
     { name: 'Highest role', value: member.roles.highest.id === member.guild.id ? '@everyone' : roleMention(member.roles.highest.id) },
     { name: 'Boosting since', value: member.premiumSinceTimestamp ? discordTime(member.premiumSinceTimestamp) : 'Not boosting' },
+    { name: 'Public account badges / flags', value: user.flags?.toArray().map(humanise).join(' · ') || 'None exposed' },
+  ]);
+  addPage('Staff membership', [
+    { name: 'Rules screening', value: member.pending ? 'Pending' : 'No pending screening' },
     { name: 'Timeout', value: member.isCommunicationDisabled() ? discordTime(member.communicationDisabledUntilTimestamp) : 'Not timed out' },
     { name: 'Member flags', value: member.flags.toArray().map(humanise).join(' · ') || 'None' },
-    { name: 'Public account badges / flags', value: user.flags?.toArray().map(humanise).join(' · ') || 'None exposed' },
     { name: 'Bot hierarchy capabilities', value: `Manageable: ${yesNo(member.manageable)} · Kickable: ${yesNo(member.kickable)}\nBannable: ${yesNo(member.bannable)} · Can timeout: ${yesNo(member.moderatable)}\nThese describe the bot’s current permissions and role order.` },
-  ]);
+  ], true);
   const roles = [...member.roles.cache.values()].filter(role => role.id !== member.guild.id)
     .sort((a, b) => b.comparePositionTo(a));
   const roleChunks = splitValues(roles.map(role => roleMention(role.id)));
@@ -72,7 +73,7 @@ export function buildMemberReport(member: GuildMember, user: User, config: Confi
   permissionChunks.forEach((value, index) => addPage(`Permissions ${index + 1}/${permissionChunks.length}`, [
     { name: 'Effective server permissions', value },
     { name: 'Channel access', value: 'Individual channel overrides still apply.' },
-  ]));
+  ], true));
 
   const presence = member.presence;
   const activities = presence?.activities.map(activity => {
@@ -94,10 +95,10 @@ export function buildMemberReport(member: GuildMember, user: User, config: Confi
         + `Self muted: ${yesNo(member.voice.selfMute)} · Self deafened: ${yesNo(member.voice.selfDeaf)}\n`
         + `Streaming: ${yesNo(member.voice.streaming)} · Camera: ${yesNo(member.voice.selfVideo)} · Stage suppressed: ${yesNo(member.voice.suppress)}`
       : 'Not connected' },
-  ]);
+  ], true);
   // Additional activities get their own pages instead of silently dropping available data.
   splitValues(activities.slice(5)).forEach(value => {
-    if (value !== 'None') addPage('More activities', [{ name: 'Current activities', value }]);
+    if (value !== 'None') addPage('More activities', [{ name: 'Current activities', value }], true);
   });
   const primary = user.primaryGuild;
   addPage('Profile and appearance', [
@@ -111,7 +112,7 @@ export function buildMemberReport(member: GuildMember, user: User, config: Confi
       ? `${displayText(primary.tag ?? 'No tag')} · Guild ID: \`${primary.identityGuildId}\`` : 'Not displayed' },
     { name: 'Nameplate', value: user.collectibles?.nameplate ? displayText(user.collectibles.nameplate.label) : 'Not set' },
   ]);
-  return { userId: user.id, thumbnail: member.displayAvatarURL({ size: 128 }), pages };
+  return { userId: user.id, thumbnail: member.displayAvatarURL({ size: 128 }), pages, emoji: config.emoji };
 }
 
 export async function loadMemberReport(guild: Guild, config: Config, userId: string): Promise<MemberReport | null> {
@@ -134,19 +135,67 @@ export function parseMemberNavigation(customId: string): { ownerId: string; user
   return match ? { ownerId: match[1]!, userId: match[2]!, page: Number(match[3]) } : null;
 }
 
-export function memberCard(report: MemberReport, ownerId: string, requestedPage: number) {
-  const index = Math.max(0, Math.min(requestedPage, report.pages.length - 1));
-  const page = report.pages[index]!;
-  return card(`${DVC_EMOJI} Member · ${page.title}`, userMention(report.userId), page.fields, {
-    thumbnail: report.thumbnail, footer: `Page ${index + 1}/${report.pages.length}`,
-    buttons: [
-      new ButtonBuilder().setCustomId(memberNavigationId(ownerId, report.userId, Math.max(0, index - 1)))
-        .setLabel('Previous').setStyle(ButtonStyle.Secondary).setDisabled(index === 0),
-      new ButtonBuilder().setCustomId(memberNavigationId(ownerId, report.userId, index + 1))
-        .setLabel('Next').setStyle(ButtonStyle.Secondary).setDisabled(index === report.pages.length - 1),
-      new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel('Open profile').setURL(`https://discord.com/users/${report.userId}`),
-    ],
+export function memberDetailsId(ownerId: string, userId: string): string {
+  return `${MEMBER_CUSTOM_ID_PREFIX}${ownerId}:${userId}:details`;
+}
+
+export function parseMemberDetails(customId: string): { ownerId: string; userId: string } | null {
+  const match = /^dvc:member:v1:(\d{17,20}):(\d{17,20}):details$/.exec(customId);
+  return match ? { ownerId: match[1]!, userId: match[2]! } : null;
+}
+
+export function memberView(report: MemberReport, staff: boolean): MemberReport {
+  return { ...report, pages: report.pages.filter(page => staff || !page.staffOnly) };
+}
+
+export function memberCard(report: MemberReport, ownerId: string, requestedPage: number,
+  options: { staff?: boolean; snapshotAt?: number } = {}) {
+  const view = memberView(report, options.staff ?? false);
+  const index = Math.max(0, Math.min(requestedPage, view.pages.length - 1));
+  const page = view.pages[index]!;
+  const buttons = [
+    new ButtonBuilder().setCustomId(memberNavigationId(ownerId, report.userId, Math.max(0, index - 1)))
+      .setLabel('Previous').setStyle(ButtonStyle.Secondary).setDisabled(index === 0),
+    new ButtonBuilder().setCustomId(memberNavigationId(ownerId, report.userId, index + 1))
+      .setLabel('Next').setStyle(ButtonStyle.Secondary).setDisabled(index === view.pages.length - 1),
+    new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel('Open profile').setURL(`https://discord.com/users/${report.userId}`),
+  ];
+  if (!options.staff) buttons.push(new ButtonBuilder().setStyle(ButtonStyle.Secondary).setLabel('Staff details')
+    .setCustomId(memberDetailsId(ownerId, report.userId)));
+  return card(brandedTitle(`Member · ${page.title}`, report.emoji ?? ''), userMention(report.userId), page.fields, {
+    thumbnail: report.thumbnail,
+    footer: `Page ${index + 1}/${view.pages.length}${options.staff ? ' · Private staff view' : ''}`
+      + (options.snapshotAt ? ` · Snapshot <t:${Math.floor(options.snapshotAt / 1_000)}:R>` : ''),
+    buttons,
   });
+}
+
+export interface MemberSnapshot {
+  ownerId: string;
+  guildId: string;
+  channelId: string;
+  report: MemberReport;
+  staff: boolean;
+  createdAt: number;
+}
+
+export class MemberReportCache {
+  private readonly entries = new Map<string, MemberSnapshot>();
+  constructor(private readonly now = Date.now, private readonly ttlMs = 120_000) {}
+
+  put(messageId: string, entry: Omit<MemberSnapshot, 'createdAt'>): void {
+    this.prune();
+    this.entries.delete(messageId);
+    if (this.entries.size >= 100) this.entries.delete(this.entries.keys().next().value!);
+    // Never retain staff-only fields in a public message's snapshot.
+    this.entries.set(messageId, { ...entry, report: structuredClone(memberView(entry.report, entry.staff)), createdAt: this.now() });
+  }
+
+  get(messageId: string): MemberSnapshot | undefined { this.prune(); return this.entries.get(messageId); }
+
+  private prune(): void {
+    for (const [id, entry] of this.entries) if (this.now() - entry.createdAt >= this.ttlMs) this.entries.delete(id);
+  }
 }
 
 export type LookupPermit = { allowed: true; release: () => void } | { allowed: false; retryAfter: number };

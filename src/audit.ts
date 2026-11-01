@@ -16,6 +16,8 @@ export interface AuditEvent {
   detail?: string;
   // Defaults to true; false retains the console copy without queueing a Discord post.
   discord?: boolean;
+  // Critical records can use reserved capacity and are sent ahead of routine records.
+  critical?: boolean;
 }
 
 export type AuditSink = (event: AuditEvent) => Promise<void>;
@@ -52,11 +54,22 @@ export class AuditLog {
       context: event.fields?.map(field => `${field.name}: ${field.value}`).join(' | '),
     });
     if (!this.sink || event.discord === false) return;
-    if (this.queue.length >= 100) {
+    if (!event.critical && this.queue.length >= 80) {
       this.logger.write('warn', 'audit_queue_full', { outcome: 'Discord copy dropped; console copy retained' });
       return;
     }
-    this.queue.push(event);
+    if (this.queue.length >= 100) {
+      const routine = this.queue.findIndex(queued => !queued.critical);
+      if (routine === -1) {
+        this.logger.write('warn', 'audit_queue_full', { outcome: 'Discord copy dropped; console copy retained' });
+        return;
+      }
+      this.queue.splice(routine, 1);
+      this.logger.write('warn', 'audit_routine_evicted', { outcome: 'Critical record retained; routine console copy retained' });
+    }
+    const firstRoutine = this.queue.findIndex(queued => !queued.critical);
+    if (event.critical && firstRoutine !== -1) this.queue.splice(firstRoutine, 0, event);
+    else this.queue.push(event);
     this.startDrain();
   }
 

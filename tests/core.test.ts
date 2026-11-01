@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { GatewayIntentBits, IntentsBitField, MessageFlags, PermissionFlagsBits, PermissionsBitField } from 'discord.js';
-import { ALL_GATEWAY_INTENTS, clientOptions } from '../src/client-options.js';
+import { REQUIRED_GATEWAY_INTENTS, clientOptions, intentFailureHint } from '../src/client-options.js';
 import { commands } from '../src/commands.js';
 import { loadConfig } from '../src/config.js';
 import { errorSummary } from '../src/logger.js';
@@ -111,14 +111,31 @@ test('panel discovery recognises legacy rows and nested V2 buttons without match
   assert.equal(hasVerificationButton([{ type: 2, custom_id: 'unrelated' }]), false);
 });
 
-test('all supported intents are enabled and mention parsing is disabled', () => {
-  const intents = new IntentsBitField(ALL_GATEWAY_INTENTS);
-  for (const value of Object.values(GatewayIntentBits)) {
-    if (typeof value === 'number') assert.equal(intents.has(value), true);
-  }
+test('only the five used intents are requested and message content is excluded', () => {
+  const intents = new IntentsBitField(REQUIRED_GATEWAY_INTENTS);
+  assert.equal(intents.bitfield, 391);
+  assert.equal(intents.has(GatewayIntentBits.MessageContent), false);
+  assert.equal(intents.has(GatewayIntentBits.DirectMessages), false);
   const options = clientOptions();
   assert.deepEqual(options.allowedMentions, { parse: [], repliedUser: false });
   assert.ok(options.makeCache);
+});
+
+test('login hints are limited to DisallowedIntents errors and close code 4014', () => {
+  for (const code of ['DisallowedIntents', 4014]) assert.match(intentFailureHint({ code })!, /Server Members and Presence/);
+  for (const error of [{ code: 'TokenInvalid' }, { code: 4004 }, new Error('Used disallowed intents'), null, 'secret']) {
+    assert.equal(intentFailureHint(error), undefined);
+  }
+});
+
+test('test deployments can select another application emoji or disable branding', () => {
+  assert.equal(loadConfig({ ...environment(), DVC_EMOJI: '<:test:777777777777777777>' }).emoji, '<:test:777777777777777777>');
+  assert.equal(loadConfig({ ...environment(), DVC_EMOJI: 'none' }).emoji, '');
+  assert.equal(loadConfig({ ...environment(), DVC_EMOJI: '' }).emoji, '');
+  assert.throws(() => loadConfig({ ...environment(), DVC_EMOJI: '[bad](https://example.com)' }), /DVC_EMOJI/);
+  const panel = verificationPanel('');
+  assert.equal(JSON.stringify(panel).includes('1566457051465388194'), false);
+  assert.equal(JSON.stringify(verificationPanel('<:test:777777777777777777>')).includes('"id":"777777777777777777"'), true);
 });
 
 test('error diagnostics exclude tokens, request data, and raw error text', () => {

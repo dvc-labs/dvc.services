@@ -3,6 +3,7 @@ import { ComponentType, PermissionFlagsBits, PermissionsBitField } from 'discord
 
 export const VERIFY_CUSTOM_ID = 'dvc:verify:v1';
 export const MEMBER_CUSTOM_ID_PREFIX = 'dvc:member:v1:';
+export const VERIFICATION_AUDIT_REASON = 'dvc.services: member completed button verification';
 
 // Supports both the old action row and the nested action row in a V2 container.
 export function hasVerificationButton(components: readonly unknown[]): boolean {

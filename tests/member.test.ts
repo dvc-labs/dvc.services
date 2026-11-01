@@ -4,7 +4,7 @@ import {
   ActivityType, Collection, GuildMemberFlagsBitField, MessageFlags, PermissionFlagsBits,
   PermissionsBitField, UserFlagsBitField, type Guild, type GuildMember, type Role, type User,
 } from 'discord.js';
-import { buildMemberReport, loadMemberReport, MemberLookupLimiter, memberCard,
+import { buildMemberReport, loadMemberReport, MemberLookupLimiter, MemberReportCache, memberCard, memberView,
   memberNavigationId, parseMemberNavigation } from '../src/member.js';
 import { messageText, testConfig } from './helpers.js';
 
@@ -42,7 +42,7 @@ function fixture(roleCount = 2) {
 test('member pages show exact native references, real dates, permissions, and honest unavailable states', () => {
   const f = fixture();
   const report = f.report();
-  const text = report.pages.map(page => messageText(memberCard(report, '888888888888888888', report.pages.indexOf(page)))).join('\n');
+  const text = report.pages.map(page => messageText(memberCard(report, '888888888888888888', report.pages.indexOf(page), { staff: true }))).join('\n');
   assert.match(text, /<@777777777777777777>/);
   assert.match(text, /<@&333333333333333333>/);
   assert.match(text, /<t:1500000000:f>/);
@@ -61,7 +61,7 @@ test('every role and permission remains available and all V2 pages fit the messa
   const report = f.report();
   const all: string[] = [];
   for (let i = 0; i < report.pages.length; i++) {
-    const payload = memberCard(report, '888888888888888888', i);
+    const payload = memberCard(report, '888888888888888888', i, { staff: true });
     const text = messageText(payload);
     all.push(text);
     assert.ok(text.length < 4_000);
@@ -112,6 +112,40 @@ test('navigation binds the requester and target and rejects malformed or oversiz
   for (const invalid of [id + ':extra', id.replace(':2', ':-1'), id.replace(':2', ':999'), 'dvc:member:v1:someone:target:0']) {
     assert.equal(parseMemberNavigation(invalid), null);
   }
+});
+
+test('public views omit permissions, hierarchy, devices, activities, and voice data even for forged page indexes', () => {
+  const f = fixture();
+  f.member.presence = { status: 'online', clientStatus: { desktop: 'online' },
+    activities: [{ name: 'Private track', type: ActivityType.Listening }] };
+  const report = f.report();
+  const view = memberView(report, false);
+  const rendered = view.pages.map((_, index) => messageText(memberCard(report, '888888888888888888', index))).join('\n')
+    + messageText(memberCard(report, '888888888888888888', 99));
+  for (const hidden of ['Bot hierarchy', 'Effective server permissions', 'Private track', '**Devices**', '**Voice status**', '**Timeout**']) {
+    assert.equal(rendered.includes(hidden), false, hidden);
+  }
+  assert.equal(view.pages.some(page => page.staffOnly), false);
+  assert.ok(memberView(report, true).pages.some(page => page.title === 'Presence and voice'));
+});
+
+test('per-message snapshots isolate public/staff data, remain stable, expire, and have bounded capacity', () => {
+  let now = 1_000;
+  const cache = new MemberReportCache(() => now);
+  const report = fixture().report();
+  const entry = { ownerId: '888888888888888888', guildId: 'guild', channelId: 'commands', report, staff: false };
+  cache.put('public', entry);
+  cache.put('private', { ...entry, staff: true });
+  assert.equal(cache.get('public')!.report.pages.some(page => page.staffOnly), false);
+  assert.equal(cache.get('private')!.report.pages.some(page => page.staffOnly), true);
+  report.pages[0]!.fields[0]!.value = 'changed after lookup';
+  assert.equal(cache.get('public')!.report.pages[0]!.fields[0]!.value.includes('changed after lookup'), false);
+  for (let i = 0; i < 100; i++) cache.put(`report-${i}`, entry);
+  assert.equal(cache.get('public'), undefined);
+  assert.equal(cache.get('private'), undefined);
+  assert.ok(cache.get('report-99'));
+  now += 120_000;
+  assert.equal(cache.get('report-99'), undefined);
 });
 
 test('lookup budgets enforce per-user intervals and a shared burst/refill limit', () => {

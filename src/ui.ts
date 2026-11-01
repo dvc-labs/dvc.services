@@ -17,8 +17,18 @@ interface CardOptions {
 export const NO_MENTIONS = { parse: [] as never[], repliedUser: false };
 
 export function displayText(value: string, limit = 300): string {
-  return escapeMarkdown(value.replace(/<(?=[@#])/g, '‹').replace(/@/g, '@\u200b'))
+  // Disable both formatting and linkification of member-controlled text. Authored links
+  // and native mentions are constructed separately and never pass through this helper.
+  const plain = value.replace(/<(?=[@#])/g, '‹').replace(/@/g, '@\u200b')
+    .replace(/:\/\//g, ':\u200b//').replace(/\bwww\./gi, 'www\u200b.')
+    .replace(/\bdiscord\.(gg|com\/invite)/gi, 'discord\u200b.$1');
+  return escapeMarkdown(plain, { maskedLink: true, heading: true, bulletedList: true, numberedList: true })
+    .replace(/>/g, '\\>')
     .slice(0, limit) || 'None';
+}
+
+export function brandedTitle(title: string, emoji: string): string {
+  return emoji ? `${emoji} ${title}` : title;
 }
 
 export function humanise(value: string): string {
@@ -68,19 +78,21 @@ function githubButton(): ButtonBuilder {
   return new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel('Follow dvc.labs on GitHub').setURL(GITHUB_URL);
 }
 
-export function verificationPanel() {
-  return card(DVC_EMOJI + ' Welcome to dvc.labs',
+export function verificationPanel(emoji = DVC_EMOJI) {
+  const verify = new ButtonBuilder().setCustomId(VERIFY_CUSTOM_ID).setLabel('Verify').setStyle(ButtonStyle.Primary);
+  const match = /^<(a?):([a-zA-Z0-9_]+):(\d+)>$/.exec(emoji);
+  if (match) verify.setEmoji({ id: match[3]!, name: match[2]!, animated: match[1] === 'a' });
+  return card(brandedTitle('Welcome to dvc.labs', emoji),
     'A place for projects, experiments, and a look behind the scenes at dvc.\n\n'
     + 'Take a moment to read the server rules, then press **Verify** to unlock the community.', [], {
-      buttons: [new ButtonBuilder().setCustomId(VERIFY_CUSTOM_ID).setLabel('Verify')
-        .setEmoji({ id: '1566457051465388194', name: 'dvc' }).setStyle(ButtonStyle.Primary), githubButton()],
+      buttons: [verify, githubButton()],
     });
 }
 
 export function aboutCard(config: Config, uptimeSeconds: number) {
   const hours = Math.floor(uptimeSeconds / 3_600);
   const minutes = Math.floor((uptimeSeconds % 3_600) / 60);
-  return card(DVC_EMOJI + ' dvc.services',
+  return card(brandedTitle('dvc.services', config.emoji),
     'The service bot for **dvc.labs** — the home for dvc. projects, experiments, and server updates.\n\n'
     + 'Member verification, a friendly welcome, member lookups, and useful server activity logs.', [
       { name: 'Version', value: 'v' + VERSION },
@@ -92,10 +104,13 @@ export function aboutCard(config: Config, uptimeSeconds: number) {
 }
 
 export function welcomeMessage(config: Config, userId: string) {
-  return card(DVC_EMOJI + ' Welcome to dvc.labs!',
+  return card(brandedTitle('Welcome to dvc.labs!', config.emoji),
     'Hey ' + userMention(userId) + ", glad you're here! Make yourself at home among the projects, experiments, and people behind dvc.\n\n"
     + 'Start in ' + channelMention(config.verificationChannelId) + ': read the server rules, then press **Verify** to join the community.\n\n'
-    + 'Curious about what we’re building? Follow **dvc.labs on GitHub** for our projects and updates. See you in the server!', [], {
+    + 'Curious about what we’re building? Follow **dvc.labs on GitHub** for our projects and updates.\n\n'
+    + 'A quick heads-up: the team logs membership, verification, voice-channel changes, and administrative activity. '
+    + 'Member profiles can be looked up publicly; live presence and moderation details are restricted to private staff views. '
+    + 'Ordinary chat and incoming DMs are not archived. See you in the server!', [], {
       buttons: [new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel('Open dvc.labs')
         .setURL('https://discord.com/channels/' + config.guildId + '/' + config.verificationChannelId), githubButton()],
     });

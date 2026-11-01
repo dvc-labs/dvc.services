@@ -15,7 +15,7 @@ npm run check
 npm run dev
 ```
 
-Configure guild installation with the `bot` and `applications.commands` scopes. Give the bot access to the configured channels, Read Message History, and View Audit Log; place its role above the ordinary verification role. Enable the Presence, Server Members, and Message Content privileged intents for the all-intents configuration. Do not commit `.env`, tokens, raw error objects, or private logs.
+Configure guild installation with `bot` and `applications.commands`. Give the bot access to configured channels, Read Message History, and View Audit Log; place its role above the ordinary verification role. Enable Presence and Server Members; leave Message Content disabled. Use `DVC_EMOJI=none` or an emoji owned by your test application. Do not commit `.env`, tokens, raw error objects, or private logs.
 
 ## Changes
 
@@ -46,7 +46,8 @@ For Discord-facing changes, manually test in the separate server:
 - Repeated clicks do not cause duplicate awards; already verified members get an acknowledgement.
 - Pending screening and invalid role hierarchy are handled safely.
 - `/about` works in the configured commands channel.
-- `/member user:@someone` works publicly for ordinary members, and another person cannot change the requester's pages. Verify per-user and shared API limits and private voice-channel redaction.
+- `/member user:@someone` works publicly for ordinary members without publishing sensitive pages. Staff details are ephemeral and require Manage Server or Moderate Members. Revoke that permission and confirm further private pages are denied. Verify snapshot expiry, no repeated member/profile fetches on page changes, shared API limits, and voice-channel redaction.
+- Hostile nicknames/statuses cannot create links, formatting, quotes, or mentions. Denied card clicks and join/DM bursts cannot displace critical verification/error logs.
 - A new human join is logged and receives the fixed welcome DM; disabled DMs are handled without a crash. Existing members receive no startup DMs.
 - Native Discord audit entries identify the actual actor and render role/member/channel references without notifications.
 - `/verification` requires Manage Server permission and reuses the panel.

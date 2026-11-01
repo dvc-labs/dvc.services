@@ -8,7 +8,7 @@ import { Logger } from '../src/logger.js';
 import { DVC_EMOJI } from '../src/version.js';
 import { messageText, testConfig } from './helpers.js';
 
-function fixture() {
+function fixture(timing?: { wait: (ms: number, signal: AbortSignal) => Promise<void> }) {
   const config = testConfig();
   const events: AuditEvent[] = [];
   const logs: Parameters<Logger['write']>[] = [];
@@ -18,13 +18,15 @@ function fixture() {
   const audit = new AuditLog(logger);
   audit.setSink(async event => { events.push(event); });
   let ready = true;
-  const activity = new GuildActivity({ config, audit, isReady: () => ready });
+  let now = 1_000;
+  const activity = new GuildActivity({ config, audit, isReady: () => ready, now: () => now,
+    wait: timing?.wait ?? (async ms => { now += ms; }) });
   const member = {
     id: '777777777777777777', guild: { id: config.guildId, memberCount: 50 },
     user: { bot: false, createdTimestamp: 1_500_000_000_000 }, joinedTimestamp: 1_600_000_000_000,
     async send(payload: unknown) { messages.push(payload); },
   };
-  return { config, member, activity, events, logs, messages,
+  return { config, member, activity, audit, events, logs, messages, now: () => now,
     setReady: (value: boolean) => { ready = value; },
     flush: async () => { await activity.flush(); await audit.flush(); } };
 }
@@ -43,7 +45,8 @@ test('new members receive one kind welcome with verification and GitHub links, p
   assert.deepEqual(payload.allowedMentions, { parse: [], repliedUser: false });
   assert.match(JSON.stringify(payload), /https:\/\/github.com\/dvc-labs/);
   assert.match(JSON.stringify(payload), /Follow dvc.labs on GitHub/);
-  assert.deepEqual(f.events.map(event => event.outcome), ['joined', 'sent']);
+  assert.deepEqual(f.events.map(event => event.outcome), ['joined']);
+  assert.ok(f.logs.some(([, event, fields]) => event === 'welcome_dm' && fields?.outcome === 'sent'));
 });
 
 test('duplicate join events do not resend DMs, while a real leave and rejoin can receive a new welcome', async () => {
@@ -82,7 +85,8 @@ test('blocked DMs are safely logged and do not interrupt the next member welcome
   f.activity.joined({ ...f.member, id: '888888888888888888' } as unknown as GuildMember);
   await f.flush();
   assert.equal(f.messages.length, 1);
-  assert.ok(f.events.some(event => event.outcome === 'not_delivered' && event.detail === 'Error code=50007'));
+  assert.ok(f.logs.some(([, event, fields]) => event === 'welcome_dm'
+    && fields?.outcome === 'not_delivered' && fields.detail === 'Error code=50007'));
   assert.equal(JSON.stringify(f.events).includes('private body/token'), false);
   assert.equal(JSON.stringify(f.logs).includes('private body/token'), false);
 });
@@ -115,7 +119,7 @@ test('a join arriving as the previous DM settles still gets drained', async () =
   assert.equal(f.messages.length, 2);
 });
 
-test('screening, nickname, boost, and timeout changes are logged only when an old snapshot exists', async () => {
+test('uncached member updates log current state without pretending the old values are known', async () => {
   const f = fixture();
   const before = { ...f.member, partial: false, nickname: null, pending: true,
     premiumSinceTimestamp: null, communicationDisabledUntilTimestamp: null };
@@ -125,9 +129,56 @@ test('screening, nickname, boost, and timeout changes are logged only when an ol
   f.activity.updated(before as unknown as GuildMember, after as unknown as GuildMember);
   f.activity.updated({ ...before, partial: true } as unknown as GuildMember, after as unknown as GuildMember);
   await f.flush();
-  assert.equal(f.events.length, 1);
+  assert.equal(f.events.length, 2);
   assert.equal(f.events[0]!.fields!.length, 4);
+  assert.equal(f.events[1]!.outcome, 'snapshot');
+  assert.match(f.events[1]!.detail!, /Previous state was not cached/);
+  assert.equal(f.events[1]!.fields!.length, 4);
   assert.equal(JSON.stringify(f.events).includes('@everyone **Dave**'), false);
+});
+
+test('welcome delivery attempts start at least 1.5 seconds apart', async () => {
+  const f = fixture();
+  const attempts: number[] = [];
+  for (let i = 0; i < 3; i++) f.activity.joined({ ...f.member,
+    id: (777777777777777777n + BigInt(i)).toString(), send: async () => { attempts.push(f.now()); },
+  } as unknown as GuildMember);
+  await f.flush();
+  assert.deepEqual(attempts, [1_000, 2_500, 4_000]);
+});
+
+test('shutdown cancels a pending DM pacing timer promptly', async () => {
+  let waiting = false;
+  const f = fixture({ wait: async (_ms, signal) => {
+    waiting = true;
+    await new Promise<void>((_resolve, reject) => {
+      signal.addEventListener('abort', () => { reject(new Error('aborted')); }, { once: true });
+    });
+  } });
+  f.activity.joined(f.member as unknown as GuildMember);
+  f.activity.joined({ ...f.member, id: '888888888888888888' } as unknown as GuildMember);
+  await Promise.resolve();
+  assert.equal(waiting, true);
+  f.activity.stop();
+  await f.flush();
+  assert.equal(f.messages.length, 1);
+});
+
+test('a 60-member join burst and DM results cannot displace a later verification error', async () => {
+  const f = fixture();
+  let release!: () => void;
+  const blocked = new Promise<void>(resolve => { release = resolve; });
+  f.audit.setSink(async event => { await blocked; f.events.push(event); });
+  for (let i = 0; i < 60; i++) f.activity.joined({ ...f.member,
+    id: (777777777777777777n + BigInt(i)).toString(),
+  } as unknown as GuildMember);
+  await f.activity.flush();
+  f.audit.record({ event: 'verification_failed', title: 'Verification failed', outcome: 'error', critical: true });
+  release();
+  await f.audit.flush();
+  assert.equal(f.events.filter(event => event.event === 'member_joined').length, 60);
+  assert.equal(f.events.some(event => event.event === 'welcome_dm'), false);
+  assert.equal(f.events[1]!.event, 'verification_failed');
 });
 
 test('Discord audit events retain the actual actor and resolve member, role, and channel targets without guessed attribution', async () => {

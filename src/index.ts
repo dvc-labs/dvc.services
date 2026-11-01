@@ -2,7 +2,7 @@ import { ActivityType, Client, Events } from 'discord.js';
 import { GuildActivity } from './activity.js';
 import { AuditLog, discordAuditSink } from './audit.js';
 import { syncCommands } from './commands.js';
-import { clientOptions } from './client-options.js';
+import { clientOptions, intentFailureHint } from './client-options.js';
 import { loadConfig, type Config } from './config.js';
 import { discordPanelRepository, preflight } from './discord.js';
 import { SetupError } from './errors.js';
@@ -44,7 +44,7 @@ async function shutdown(reason: string, code: number): Promise<void> {
   activity.stop();
   const forcedExit = setTimeout(() => process.exit(code), 8_000);
   forcedExit.unref();
-  audit.record({ event: 'bot_stopping', title: 'dvc.services stopping', outcome: reason });
+  audit.record({ event: 'bot_stopping', title: 'dvc.services stopping', outcome: reason, critical: true });
   try { await activity.flush(); await audit.flush(); }
   finally {
     await client.destroy();
@@ -62,7 +62,7 @@ async function initialise(readyClient: Client<true>): Promise<void> {
   audit.record({ event: 'commands_synced', title: 'Slash commands ready', outcome: changed ? 'updated' : 'unchanged' });
 
   verification = new VerificationService(resources.gateway);
-  const repository = discordPanelRepository(resources.verificationChannel);
+  const repository = discordPanelRepository(resources.verificationChannel, config);
   let panelTask: Promise<{ id: string; created: boolean }> | undefined;
   refreshPanel = () => {
     panelTask ??= ensureVerificationPanel(repository, readyClient.user.id, config.verificationMessageId)
@@ -76,7 +76,7 @@ async function initialise(readyClient: Client<true>): Promise<void> {
     detail: `Message ID: ${panel.id}` });
   if (stopping) return;
   operational = true;
-  audit.record({ event: 'bot_online', title: 'dvc.services online', outcome: 'ready',
+  audit.record({ event: 'bot_online', title: 'dvc.services online', outcome: 'ready', critical: true,
     detail: `v${VERSION} is ready in dvc.labs. Verification, member lookups, welcome DMs, and server activity logs are available.` });
 }
 
@@ -114,13 +114,15 @@ client.once(Events.ClientReady, readyClient => {
   void initialise(readyClient).catch(error => {
     const detail = error instanceof SetupError ? error.message : errorSummary(error);
     logger.write('error', 'startup_failed', { detail });
-    audit.record({ event: 'startup_failed', title: 'dvc.services startup failed', outcome: 'error', detail });
+    audit.record({ event: 'startup_failed', title: 'dvc.services startup failed', outcome: 'error', detail, critical: true });
     void shutdown('startup_failed', 1);
   });
 });
 client.on(Events.Error, error => logger.write('error', 'discord_client_error', { error: errorSummary(error) }));
 client.on(Events.ShardError, error => logger.write('warn', 'discord_connection_error', { error: errorSummary(error) }));
-client.on(Events.ShardDisconnect, (event, shardId) => logger.write('warn', 'discord_disconnected', { shardId, closeCode: event.code }));
+client.on(Events.ShardDisconnect, (event, shardId) => logger.write('warn', 'discord_disconnected', {
+  shardId, closeCode: event.code, detail: intentFailureHint(event),
+}));
 client.on(Events.ShardReconnecting, shardId => logger.write('info', 'discord_reconnecting', { shardId }));
 client.on(Events.ShardResume, (shardId, replayedEvents) => logger.write('info', 'bot_reconnected', { outcome: 'resumed', shardId, replayedEvents }));
 client.on(Events.ShardReady, shardId => logger.write('info', 'discord_connected', { outcome: 'identified', shardId }));
@@ -145,6 +147,6 @@ logger.write('info', 'bot_starting', { version: VERSION, guildId: config.guildId
 try { await client.login(config.token); }
 catch (error) {
   logger.write('error', 'discord_login_failed', { error: errorSummary(error),
-    detail: 'v0.2.0 requests all intents. Enable Server Members, Presence, and Message Content intents in the Developer Portal before starting.' });
+    detail: intentFailureHint(error) });
   await shutdown('discord_login_failed', 1);
 }

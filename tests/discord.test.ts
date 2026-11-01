@@ -57,7 +57,7 @@ test('the existing legacy panel upgrades in place and the real adapter finds its
     },
     send: async () => { creates++; return { id: 'another-panel' }; },
   };
-  const repository = discordPanelRepository(channel as unknown as TextChannel);
+  const repository = discordPanelRepository(channel as unknown as TextChannel, config);
   assert.deepEqual(await ensureVerificationPanel(repository, config.applicationId, message.id), { id: message.id, created: false });
   assert.equal(edits[0]!.content, null);
   assert.deepEqual(edits[0]!.embeds, []);

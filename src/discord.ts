@@ -3,7 +3,7 @@ import { ChannelType, PermissionFlagsBits, type Client, type Guild,
 import type { Config } from './config.js';
 import { SetupError } from './errors.js';
 import type { PanelMessage, PanelRepository } from './panel.js';
-import { assertSafeVerificationRole, hasVerificationButton } from './policy.js';
+import { assertSafeVerificationRole, hasVerificationButton, VERIFICATION_AUDIT_REASON } from './policy.js';
 import { verificationPanel } from './ui.js';
 import type { VerificationGateway } from './verification.js';
 
@@ -34,7 +34,7 @@ export class DiscordVerificationGateway implements VerificationGateway {
     // A single-role PUT preserves every other role the member already has.
     await this.guild.members.addRole({
       user: userId, role: this.config.verificationRoleId,
-      reason: 'dvc.services: member completed button verification',
+      reason: VERIFICATION_AUDIT_REASON,
     });
   }
 }
@@ -47,7 +47,7 @@ function panelMessage(message: Message): PanelMessage {
   };
 }
 
-export function discordPanelRepository(channel: TextChannel): PanelRepository {
+export function discordPanelRepository(channel: TextChannel, config: Pick<Config, 'emoji'>): PanelRepository {
   return {
     async get(id) {
       try { return panelMessage(await channel.messages.fetch({ message: id, cache: false, force: true })); }
@@ -62,9 +62,9 @@ export function discordPanelRepository(channel: TextChannel): PanelRepository {
     },
     async update(id) {
       // Discord requires clearing legacy fields when converting an existing panel to V2.
-      await channel.messages.edit(id, { ...verificationPanel(), content: null, embeds: [] });
+      await channel.messages.edit(id, { ...verificationPanel(config.emoji), content: null, embeds: [] });
     },
-    async create() { return (await channel.send(verificationPanel())).id; },
+    async create() { return (await channel.send(verificationPanel(config.emoji))).id; },
   };
 }
 
