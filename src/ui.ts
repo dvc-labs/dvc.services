@@ -1,10 +1,11 @@
 import {
   ActionRowBuilder, ButtonBuilder, ButtonStyle, ContainerBuilder, escapeMarkdown,
   MessageFlags, SectionBuilder, SeparatorBuilder, TextDisplayBuilder, ThumbnailBuilder,
-  channelMention, userMention,
+  channelMention, roleMention, userMention,
 } from 'discord.js';
+import type { BulletinResult } from './bulletin.js';
 import type { Config } from './config.js';
-import { VERIFY_CUSTOM_ID } from './policy.js';
+import { BULLETIN_JOIN_ID, BULLETIN_LEAVE_ID, VERIFY_CUSTOM_ID } from './policy.js';
 import { BRAND_COLOR, DVC_EMOJI, GITHUB_URL, REPOSITORY_URL, VERSION, WEBSITE_URL } from './version.js';
 
 export interface CardField { name: string; value: string }
@@ -92,6 +93,44 @@ export function verificationPanel(emoji = DVC_EMOJI) {
     + 'Take a moment to read the server rules, then press **Verify** to unlock the community.', [], {
       buttons: [verify, githubButton()],
     });
+}
+
+export function bulletinButton(subscribe: boolean): ButtonBuilder {
+  return new ButtonBuilder().setCustomId(subscribe ? BULLETIN_JOIN_ID : BULLETIN_LEAVE_ID)
+    .setLabel(subscribe ? 'Get Bulletin pings' : 'Stop Bulletin pings').setStyle(ButtonStyle.Secondary);
+}
+
+// Shown on the private verification reply, directly under the "you're verified" message.
+export function bulletinOffer(roleId: string): CardField {
+  return { name: 'Want news pings?',
+    value: 'Press **Get Bulletin pings** to be mentioned with ' + roleMention(roleId)
+      + ' for dvc.labs news and updates. It’s optional, and you can switch it off again any time.' };
+}
+
+// The same private message is edited in place after each press, so the button always shows the next action.
+export function bulletinCard(result: BulletinResult, requested: boolean, roleId: string,
+  config: Pick<Config, 'emoji' | 'verificationChannelId'>) {
+  const role = roleMention(roleId);
+  const reply = (title: string, description: string, subscribe: boolean | null) =>
+    card(brandedTitle(title, config.emoji), description, [],
+      subscribe === null ? {} : { buttons: [bulletinButton(subscribe)] });
+  switch (result) {
+    case 'subscribed':
+      return reply('Bulletin pings on', `You’ll now get ${role} pings for dvc.labs news and updates. You can switch them off any time.`, false);
+    case 'already_subscribed':
+      return reply('Bulletin pings are on', `You already have ${role}. Press the button if you’d like to switch it off.`, false);
+    case 'unsubscribed':
+      return reply('Bulletin pings off', `You won’t get ${role} pings any more. You can switch them back on whenever you like.`, true);
+    case 'already_unsubscribed':
+      return reply('Bulletin pings are off', `You don’t have ${role}. Press the button if you’d like news pings.`, true);
+    case 'not_verified':
+      return reply('Verify first', `Press **Verify** in ${channelMention(config.verificationChannelId)} first, then come back for Bulletin pings.`, null);
+    case 'bot':
+      return reply('Members only', 'Bulletin pings are for human members.', null);
+    case 'processing':
+    case 'cooldown':
+      return reply('Just a moment', 'Please wait a few seconds before changing Bulletin pings again.', requested);
+  }
 }
 
 export function aboutCard(config: Config, uptimeSeconds: number) {

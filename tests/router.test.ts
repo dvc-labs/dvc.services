@@ -6,7 +6,8 @@ import type { Config } from '../src/config.js';
 import { SetupError } from '../src/errors.js';
 import { Logger } from '../src/logger.js';
 import { memberDetailsId, memberNavigationId, type MemberReport } from '../src/member.js';
-import { VERIFY_CUSTOM_ID } from '../src/policy.js';
+import { BulletinService, type BulletinGateway } from '../src/bulletin.js';
+import { BULLETIN_JOIN_ID, BULLETIN_LEAVE_ID, VERIFY_CUSTOM_ID } from '../src/policy.js';
 import { InteractionRouter, type RouterDependencies } from '../src/router.js';
 import { VerificationService, type VerificationGateway } from '../src/verification.js';
 import { messageText } from './helpers.js';
@@ -15,7 +16,7 @@ function fixture(kind: 'command' | 'button' | 'modal' = 'button') {
   const config: Config = {
     token: 'test', guildId: 'guild', applicationId: 'bot', verificationRoleId: 'member-role',
     verificationChannelId: 'verification', commandsChannelId: 'commands', logsChannelId: 'logs',
-    verificationMessageId: undefined, port: 8080, logLevel: 'error', emoji: '',
+    verificationMessageId: undefined, bulletinRoleId: undefined, port: 8080, logLevel: 'error', emoji: '',
   };
   const events: AuditEvent[] = [];
   const awarded: string[] = [];
@@ -495,4 +496,144 @@ test('about sends its public V2 card and records command use', async () => {
   assert.equal(payload.embeds, undefined);
   assert.equal(payload.components.length, 1);
   assert.match(messageText(payload), /loon.host/);
+});
+
+function bulletinFixture(member = { verified: true, subscribed: false, bot: false }) {
+  const f = fixture();
+  Object.assign(f.deps.config, { bulletinRoleId: 'bulletin-role' });
+  const writes: [string, boolean][] = [];
+  const gateway: BulletinGateway = {
+    getMember: async () => member,
+    assertRoleAssignable: async () => {},
+    setRole: async (id, subscribed) => { writes.push([id, subscribed]); },
+  };
+  const service = new BulletinService(gateway, f.deps.now);
+  f.deps.bulletin = () => service;
+  return { ...f, member, writes, bulletinGateway: gateway,
+    click: async (customId: string) => { f.useMessage('private-card'); f.raw.customId = customId; await f.run(); } };
+}
+
+test('verification offers optional Bulletin pings on the same private card and never assigns them', async () => {
+  for (const [hasRole, offered] of [[false, true], [true, true]] as const) {
+    const f = bulletinFixture();
+    f.gateway.getMember = async () => ({ hasRole, pending: false, bot: false });
+    await f.run();
+    const card = JSON.stringify(f.replies[1]);
+    assert.equal(card.includes(BULLETIN_JOIN_ID), offered);
+    assert.match(messageText(f.replies[1]), /Get Bulletin pings|Want news pings/);
+    assert.match(messageText(f.replies[1]), /<@&bulletin-role>/);
+    assert.deepEqual(f.writes, []);
+  }
+});
+
+test('no Bulletin offer without configuration, without a service, or for members who are not verified', async () => {
+  const unconfigured = fixture();
+  await unconfigured.run();
+  assert.equal(JSON.stringify(unconfigured.replies).includes('dvc:bulletin'), false);
+  const noService = bulletinFixture();
+  noService.deps.bulletin = () => undefined;
+  await noService.run();
+  assert.equal(JSON.stringify(noService.replies).includes('dvc:bulletin'), false);
+  for (const member of [{ hasRole: false, pending: true, bot: false }, { hasRole: false, pending: false, bot: true }]) {
+    const f = bulletinFixture();
+    f.gateway.getMember = async () => member;
+    await f.run();
+    assert.equal(JSON.stringify(f.replies).includes('dvc:bulletin'), false);
+  }
+});
+
+test('Bulletin buttons toggle only the clicking member’s role and edit the private card in place', async () => {
+  const f = bulletinFixture();
+  await f.click(BULLETIN_JOIN_ID);
+  assert.deepEqual(f.writes, [['member', true]]);
+  assert.deepEqual(f.replies[0], { deferUpdate: true });
+  assert.match(messageText(f.replies[1]), /Bulletin pings on/);
+  assert.ok(JSON.stringify(f.replies[1]).includes(BULLETIN_LEAVE_ID));
+  assert.equal(f.events[0]!.event, 'bulletin_updated');
+  assert.equal(f.events[0]!.outcome, 'subscribed');
+  assert.equal(f.events[0]!.roleId, 'bulletin-role');
+  assert.equal(f.events[0]!.userId, 'member');
+  f.member.subscribed = true;
+  f.advance(3_001);
+  await f.click(BULLETIN_LEAVE_ID);
+  assert.deepEqual(f.writes, [['member', true], ['member', false]]);
+  assert.match(messageText(f.replies.at(-1)), /Bulletin pings off/);
+  assert.ok(JSON.stringify(f.replies.at(-1)).includes(BULLETIN_JOIN_ID));
+  assert.equal(f.events[1]!.outcome, 'unsubscribed');
+});
+
+test('Bulletin presses from the wrong guild, channel, author, startup state, or a disabled feature never touch roles', async () => {
+  for (const change of ['guild', 'channel', 'author', 'not_ready', 'disabled']) {
+    const f = bulletinFixture();
+    f.useMessage('private-card');
+    f.raw.customId = BULLETIN_JOIN_ID;
+    if (change === 'guild') f.raw.guildId = 'elsewhere';
+    if (change === 'channel') f.raw.channelId = 'elsewhere';
+    if (change === 'author') f.raw.message.author.id = 'someone';
+    if (change === 'not_ready') f.setReady(false);
+    if (change === 'disabled') f.deps.bulletin = () => undefined;
+    await f.run();
+    assert.deepEqual(f.writes, [], change);
+    assert.equal(f.raw.deferred, false, change);
+    assert.equal((f.replies[0] as { flags: number }).flags & MessageFlags.Ephemeral, MessageFlags.Ephemeral, change);
+    assert.match(messageText(f.replies[0]), /Bulletin unavailable/);
+    assert.equal(f.events.length, 0, change); // Denials stay in the console.
+  }
+});
+
+test('unverified members cannot opt in, but any member can opt out; unchanged states cause no write or Discord log', async () => {
+  const unverified = bulletinFixture({ verified: false, subscribed: false, bot: false });
+  await unverified.click(BULLETIN_JOIN_ID);
+  assert.deepEqual(unverified.writes, []);
+  assert.match(messageText(unverified.replies.at(-1)), /Verify first/);
+  assert.equal(JSON.stringify(unverified.replies.at(-1)).includes('dvc:bulletin'), false);
+  assert.equal(unverified.events.length, 0);
+  const lapsed = bulletinFixture({ verified: false, subscribed: true, bot: false });
+  await lapsed.click(BULLETIN_LEAVE_ID);
+  assert.deepEqual(lapsed.writes, [['member', false]]);
+  const already = bulletinFixture({ verified: true, subscribed: true, bot: false });
+  await already.click(BULLETIN_JOIN_ID);
+  assert.deepEqual(already.writes, []);
+  assert.match(messageText(already.replies.at(-1)), /Bulletin pings are on/);
+  assert.equal(already.events.length, 0);
+});
+
+test('rapid Bulletin presses stay local and keep the requested action available', async () => {
+  const f = bulletinFixture();
+  await f.click(BULLETIN_JOIN_ID);
+  await f.click(BULLETIN_JOIN_ID);
+  assert.deepEqual(f.writes, [['member', true]]);
+  assert.match(messageText(f.replies.at(-1)), /Just a moment/);
+  assert.ok(JSON.stringify(f.replies.at(-1)).includes(BULLETIN_JOIN_ID));
+  assert.equal(f.events.length, 1);
+});
+
+test('a failed Bulletin write is a critical operator log with generic private guidance and no changed-role event', async () => {
+  const f = bulletinFixture();
+  f.bulletinGateway.setRole = async () => { throw new Error('private request body'); };
+  await f.click(BULLETIN_JOIN_ID);
+  assert.equal(f.events.length, 1);
+  assert.equal(f.events[0]!.event, 'bulletin_failed');
+  assert.equal(f.events[0]!.priority, 'critical');
+  assert.equal(JSON.stringify(f.replies).includes('private request body'), false);
+  assert.equal((f.replies.at(-1) as { flags: number }).flags & MessageFlags.Ephemeral, MessageFlags.Ephemeral);
+  assert.match(messageText(f.replies.at(-1)), /Something went wrong/);
+});
+
+test('Bulletin setup errors keep their corrective message in operator logs only', async () => {
+  const f = bulletinFixture();
+  f.bulletinGateway.assertRoleAssignable = async () => { throw new SetupError('Move the dvc.services bot role above the Bulletin role.'); };
+  await f.click(BULLETIN_JOIN_ID);
+  assert.match(f.events[0]!.detail!, /above the Bulletin role/);
+  assert.equal(messageText(f.replies).includes('above the Bulletin role'), false);
+});
+
+test('a lost Bulletin confirmation reply preserves the role change and its log', async () => {
+  const f = bulletinFixture();
+  f.raw.editReply = async () => { throw new Error('Unknown interaction'); };
+  await f.click(BULLETIN_JOIN_ID);
+  assert.deepEqual(f.writes, [['member', true]]);
+  assert.equal(f.events[0]!.event, 'bulletin_updated');
+  assert.equal(f.logs.some(([, event]) => event === 'interaction_reply_failed'), true);
+  assert.equal(f.events.some(event => event.event === 'bulletin_failed'), false);
 });

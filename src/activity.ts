@@ -6,7 +6,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import type { AuditLog } from './audit.js';
 import type { Config } from './config.js';
 import { errorSummary } from './logger.js';
-import { Cooldown, VERIFICATION_AUDIT_REASON } from './policy.js';
+import { Cooldown, OWN_ROLE_AUDIT_REASONS } from './policy.js';
 import { brandedTitle, discordTime, displayText, humanise, welcomeMessage, type CardField } from './ui.js';
 
 interface ActivityDependencies {
@@ -42,6 +42,8 @@ export class GuildActivity {
     this.wait = deps.wait ?? ((ms, signal) => delay(ms, undefined, { signal }));
   }
 
+  private title(text: string): string { return brandedTitle(text, this.deps.config.emoji); }
+
   private accepts(guildId: string): boolean {
     return !this.stopped && this.deps.isReady() && guildId === this.deps.config.guildId;
   }
@@ -51,7 +53,7 @@ export class GuildActivity {
     if (this.recentJoins.has(member.id) && this.recentJoins.get(member.id) === member.joinedTimestamp) return;
     if (this.recentJoins.size >= 1_000) this.recentJoins.delete(this.recentJoins.keys().next().value!);
     this.recentJoins.set(member.id, member.joinedTimestamp);
-    this.deps.audit.record({ event: 'member_joined', title: brandedTitle('Member joined', this.deps.config.emoji),
+    this.deps.audit.record({ event: 'member_joined', title: this.title('Member joined'),
       outcome: 'joined', userId: member.id, fields: [
         { name: 'Account created', value: discordTime(member.user.createdTimestamp) },
         { name: 'Joined', value: discordTime(member.joinedTimestamp) },
@@ -102,14 +104,14 @@ export class GuildActivity {
   left(member: GuildMember | PartialGuildMember): void {
     if (!this.accepts(member.guild.id)) return;
     this.recentJoins.delete(member.id);
-    this.deps.audit.record({ event: 'member_left', title: brandedTitle('Member left', this.deps.config.emoji), outcome: 'left',
+    this.deps.audit.record({ event: 'member_left', title: this.title('Member left'), outcome: 'left',
       userId: member.id, fields: [{ name: 'Server members', value: String(member.guild.memberCount) }] });
   }
 
   updated(before: GuildMember | PartialGuildMember, after: GuildMember): void {
     if (!this.accepts(after.guild.id)) return;
     if (before.partial) {
-      this.deps.audit.record({ event: 'member_updated', title: brandedTitle('Member state observed', this.deps.config.emoji),
+      this.deps.audit.record({ event: 'member_updated', title: this.title('Member state observed'),
         outcome: 'snapshot', userId: after.id, detail: 'Previous state was not cached; these are current values, not inferred changes.',
         fields: [
           { name: 'Nickname', value: displayText(after.nickname ?? 'Not set', 100) },
@@ -127,7 +129,7 @@ export class GuildActivity {
       value: after.premiumSinceTimestamp ? `Boosting since ${discordTime(after.premiumSinceTimestamp)}` : 'No longer boosting' });
     if (before.communicationDisabledUntilTimestamp !== after.communicationDisabledUntilTimestamp) fields.push({ name: 'Timeout',
       value: after.isCommunicationDisabled() ? discordTime(after.communicationDisabledUntilTimestamp) : 'Removed or expired' });
-    if (fields.length) this.deps.audit.record({ event: 'member_updated', title: brandedTitle('Member updated', this.deps.config.emoji),
+    if (fields.length) this.deps.audit.record({ event: 'member_updated', title: this.title('Member updated'),
       outcome: 'updated', userId: after.id, fields });
   }
 
@@ -158,17 +160,17 @@ export class GuildActivity {
     if (entry.target && 'name' in entry.target && typeof entry.target.name === 'string') {
       fields.push({ name: 'Recorded target name', value: displayText(entry.target.name, 150) });
     }
-    this.deps.audit.record({ event: 'server_audit_entry', title: brandedTitle('Server audit', this.deps.config.emoji), outcome: 'recorded', fields,
+    this.deps.audit.record({ event: 'server_audit_entry', title: this.title('Server audit'), outcome: 'recorded', fields,
       ...(entry.executorId ? { actorId: entry.executorId } : {}),
       ...(userId ? { userId } : {}), ...(roleId ? { roleId } : {}), ...(channelId ? { channelId } : {}),
-      // The verification result already records our own role award; keep this trace in the console.
+      // Verification and Bulletin results already record our own role changes; keep this trace in the console.
       discord: !(entry.action === AuditLogEvent.MemberRoleUpdate && entry.executorId === this.deps.config.applicationId
-        && entry.reason === VERIFICATION_AUDIT_REASON) });
+        && OWN_ROLE_AUDIT_REASONS.has(entry.reason ?? '')) });
   }
 
   voiceChanged(before: VoiceState, after: VoiceState): void {
     if (!this.accepts(after.guild.id) || before.channelId === after.channelId) return;
-    this.deps.audit.record({ event: 'voice_channel_changed', title: brandedTitle('Voice activity', this.deps.config.emoji),
+    this.deps.audit.record({ event: 'voice_channel_changed', title: this.title('Voice activity'),
       outcome: after.channelId ? before.channelId ? 'moved' : 'joined' : 'left', userId: after.id,
       ...(after.channelId ? { channelId: after.channelId } : {}),
       fields: before.channelId ? [{ name: 'Previous channel', value: channelMention(before.channelId) }] : [] });

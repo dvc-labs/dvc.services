@@ -6,7 +6,7 @@ import { REQUIRED_GATEWAY_INTENTS, clientOptions, intentFailureHint } from '../s
 import { commands } from '../src/commands.js';
 import { loadConfig } from '../src/config.js';
 import { errorSummary } from '../src/logger.js';
-import { assertSafeVerificationRole, Cooldown, hasVerificationButton, isTrustedVerificationButton, VERIFY_CUSTOM_ID } from '../src/policy.js';
+import { assertSafeMemberRole, Cooldown, hasVerificationButton, isTrustedVerificationButton, VERIFY_CUSTOM_ID } from '../src/policy.js';
 import { verificationPanel } from '../src/ui.js';
 import { BRAND_COLOR, VERSION } from '../src/version.js';
 
@@ -55,11 +55,29 @@ test('verification requires the configured guild, channel, bot author, active me
 
 test('verification never awards an integration, everyone, or staff role', () => {
   const role = { id: 'members', managed: false, permissions: new PermissionsBitField(PermissionFlagsBits.ViewChannel) };
-  assert.doesNotThrow(() => assertSafeVerificationRole(role, 'guild'));
-  assert.throws(() => assertSafeVerificationRole({ ...role, id: 'guild' }, 'guild'));
-  assert.throws(() => assertSafeVerificationRole({ ...role, managed: true }, 'guild'));
+  assert.doesNotThrow(() => assertSafeMemberRole(role, 'guild'));
+  assert.throws(() => assertSafeMemberRole({ ...role, id: 'guild' }, 'guild'));
+  assert.throws(() => assertSafeMemberRole({ ...role, managed: true }, 'guild'));
   for (const permission of [PermissionFlagsBits.Administrator, PermissionFlagsBits.ManageRoles, PermissionFlagsBits.BanMembers]) {
-    assert.throws(() => assertSafeVerificationRole({ ...role, permissions: new PermissionsBitField(permission) }, 'guild'));
+    assert.throws(() => assertSafeMemberRole({ ...role, permissions: new PermissionsBitField(permission) }, 'guild'));
+  }
+});
+
+test('self-service Bulletin roles get the same safety checks and name themselves in the error', () => {
+  const role = { id: 'bulletin', managed: false, permissions: new PermissionsBitField(PermissionFlagsBits.MentionEveryone) };
+  assert.doesNotThrow(() => assertSafeMemberRole(role, 'guild', 'Bulletin'));
+  assert.throws(() => assertSafeMemberRole({ ...role, id: 'guild' }, 'guild', 'Bulletin'), { message: /^The Bulletin role must be a normal member role/ });
+  assert.throws(() => assertSafeMemberRole({ ...role, managed: true }, 'guild', 'Bulletin'), { name: 'SetupError' });
+  assert.throws(() => assertSafeMemberRole({ ...role, permissions: new PermissionsBitField(PermissionFlagsBits.KickMembers) }, 'guild', 'Bulletin'),
+    { message: /^The Bulletin role must not grant administrative or moderation permissions/ });
+});
+
+test('BULLETIN_ROLE_ID is optional, exact, and cannot be @everyone or the verification role', () => {
+  assert.equal(loadConfig(environment()).bulletinRoleId, undefined);
+  assert.equal(loadConfig({ ...environment(), BULLETIN_ROLE_ID: '  ' }).bulletinRoleId, undefined);
+  assert.equal(loadConfig({ ...environment(), BULLETIN_ROLE_ID: ' 1562268805474820156 ' }).bulletinRoleId, '1562268805474820156');
+  for (const value of ['not-a-role', '1e18', environment().GUILD_ID!, environment().VERIFICATION_ROLE_ID!]) {
+    assert.throws(() => loadConfig({ ...environment(), BULLETIN_ROLE_ID: value }), { name: 'SetupError' });
   }
 });
 
@@ -71,7 +89,7 @@ for (const name of ['PinMessages', 'BypassSlowmode'] as const) {
       PermissionFlagsBits[name],
     ]);
     assert.equal(permissions.has(PermissionFlagsBits.ManageMessages), false);
-    assert.throws(() => assertSafeVerificationRole({
+    assert.throws(() => assertSafeMemberRole({
       id: 'members', managed: false, permissions,
     }, 'guild'), { name: 'SetupError', message: /administrative or moderation permissions/ });
   });

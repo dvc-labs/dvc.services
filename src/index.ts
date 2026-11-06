@@ -1,6 +1,7 @@
 import { ActivityType, Client, Events } from 'discord.js';
 import { GuildActivity } from './activity.js';
 import { AuditLog, discordAuditSink } from './audit.js';
+import { BulletinService } from './bulletin.js';
 import { syncCommands } from './commands.js';
 import { clientOptions, intentFailureHint } from './client-options.js';
 import { loadConfig, type Config } from './config.js';
@@ -33,6 +34,7 @@ let operational = false;
 let stopping = false;
 let currentPanelId: string | undefined;
 let verification: VerificationService | undefined;
+let bulletin: BulletinService | undefined;
 let refreshPanel: (() => Promise<{ id: string; created: boolean }>) | undefined;
 const activity = new GuildActivity({ config, audit, isReady: () => operational && !stopping });
 const health = createHealthServer(() => operational && !stopping && client.isReady());
@@ -62,6 +64,7 @@ async function initialise(readyClient: Client<true>): Promise<void> {
   audit.record({ event: 'commands_synced', title: 'Slash commands ready', outcome: changed ? 'updated' : 'unchanged' });
 
   verification = new VerificationService(resources.gateway);
+  if (resources.bulletinGateway) bulletin = new BulletinService(resources.bulletinGateway);
   const repository = discordPanelRepository(resources.verificationChannel, config);
   let panelTask: Promise<{ id: string; created: boolean }> | undefined;
   refreshPanel = () => {
@@ -77,7 +80,8 @@ async function initialise(readyClient: Client<true>): Promise<void> {
   if (stopping) return;
   operational = true;
   audit.record({ event: 'bot_online', title: 'dvc.services online', outcome: 'ready', priority: 'critical',
-    detail: `v${VERSION} is ready in dvc.labs. Verification, member lookups, welcome DMs, and server activity logs are available.` });
+    detail: `v${VERSION} is ready in dvc.labs. Verification, member lookups, welcome DMs, and server activity logs are available.`
+      + (bulletin ? ' Optional Bulletin pings are enabled.' : '') });
 }
 
 const router = new InteractionRouter({
@@ -94,6 +98,7 @@ const router = new InteractionRouter({
     if (!verification) throw new SetupError('Verification has not initialised.');
     return verification;
   },
+  bulletin: () => bulletin,
   refreshPanel: async () => {
     if (!refreshPanel) throw new SetupError('Verification panel has not initialised.');
     return refreshPanel();
