@@ -11,6 +11,8 @@ export interface Config {
   readonly commandsChannelId: string;
   readonly logsChannelId: string;
   readonly verificationMessageId: string | undefined;
+  // Optional self-service news-ping role offered after verification; absent disables the feature.
+  readonly bulletinRoleId: string | undefined;
   readonly port: number;
   readonly logLevel: LogLevel;
   readonly emoji: string;
@@ -54,12 +56,17 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     logsChannelId: snowflake(env, 'LOGS_CHANNEL_ID'),
     verificationMessageId: env.VERIFICATION_MESSAGE_ID?.trim()
       ? snowflake(env, 'VERIFICATION_MESSAGE_ID') : undefined,
+    bulletinRoleId: env.BULLETIN_ROLE_ID?.trim() ? snowflake(env, 'BULLETIN_ROLE_ID') : undefined,
     port,
     logLevel: logLevel as LogLevel,
     emoji,
   };
   if (config.verificationRoleId === config.guildId) {
     throw new SetupError('VERIFICATION_ROLE_ID cannot be the @everyone role.');
+  }
+  if (config.bulletinRoleId
+    && (config.bulletinRoleId === config.guildId || config.bulletinRoleId === config.verificationRoleId)) {
+    throw new SetupError('BULLETIN_ROLE_ID must be its own role, not @everyone or VERIFICATION_ROLE_ID.');
   }
   if (new Set([config.verificationChannelId, config.commandsChannelId, config.logsChannelId]).size !== 3) {
     throw new SetupError('Use separate verification, commands, and private logs channels.');

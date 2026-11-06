@@ -18,5 +18,5 @@ export function testConfig(): Config {
   return { token: 'test-token', guildId: '111111111111111111', applicationId: '222222222222222222',
     verificationRoleId: '333333333333333333', verificationChannelId: '444444444444444444',
     commandsChannelId: '555555555555555555', logsChannelId: '666666666666666666',
-    verificationMessageId: undefined, port: 8080, logLevel: 'error', emoji: DVC_EMOJI };
+    verificationMessageId: undefined, bulletinRoleId: undefined, port: 8080, logLevel: 'error', emoji: DVC_EMOJI };
 }

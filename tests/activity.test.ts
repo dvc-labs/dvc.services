@@ -242,3 +242,18 @@ test('voice channel changes log native references and ignore microphone-only upd
   assert.equal(f.events[0]!.channelId, after.channelId);
   assert.equal(f.events[0]!.fields![0]!.value, '<#100000000000000001>');
 });
+
+test('our own Bulletin role changes stay in the console, like verification awards', async () => {
+  const f = fixture();
+  const entry = { id: '100000000000000001', action: AuditLogEvent.MemberRoleUpdate, executorId: f.config.applicationId,
+    targetId: f.member.id, targetType: 'User', target: null, changes: [] };
+  const reasons = ['dvc.services: member opted in to Bulletin pings', 'dvc.services: member opted out of Bulletin pings'];
+  reasons.forEach((reason, index) => f.activity.auditEntry({ ...entry, id: String(100000000000000001n + BigInt(index)), reason } as unknown as GuildAuditLogsEntry,
+    f.member.guild as unknown as Guild));
+  f.activity.auditEntry({ ...entry, id: '100000000000000009', reason: reasons[0], executorId: '888888888888888888' } as unknown as GuildAuditLogsEntry,
+    f.member.guild as unknown as Guild);
+  await f.flush();
+  assert.equal(f.logs.filter(([, name]) => name === 'server_audit_entry').length, 3);
+  assert.equal(f.events.length, 1);
+  assert.equal(f.events[0]!.actorId, '888888888888888888');
+});

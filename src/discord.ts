@@ -3,9 +3,25 @@ import { ChannelType, PermissionFlagsBits, type Client, type Guild,
 import type { Config } from './config.js';
 import { SetupError } from './errors.js';
 import type { PanelMessage, PanelRepository } from './panel.js';
-import { assertSafeVerificationRole, hasVerificationButton, VERIFICATION_AUDIT_REASON } from './policy.js';
+import type { BulletinGateway } from './bulletin.js';
+import { assertSafeMemberRole, BULLETIN_JOIN_REASON, BULLETIN_LEAVE_REASON, hasVerificationButton,
+  VERIFICATION_AUDIT_REASON } from './policy.js';
 import { verificationPanel } from './ui.js';
 import type { VerificationGateway } from './verification.js';
+
+// Shared by every role the bot hands out: it exists, is safe to self-assign, and sits below the bot.
+async function assertRoleAssignable(guild: Guild, roleId: string, envName: string, label: string): Promise<void> {
+  const role = await guild.roles.fetch(roleId, { force: true });
+  if (!role) throw new SetupError(`${envName} does not exist in GUILD_ID.`);
+  assertSafeMemberRole(role, guild.id, label);
+  const me = await guild.members.fetchMe({ force: true, cache: false });
+  if (!me.permissions.has(PermissionFlagsBits.ManageRoles)) {
+    throw new SetupError('Give the bot Manage Roles permission.');
+  }
+  if (me.roles.highest.comparePositionTo(role) <= 0) {
+    throw new SetupError(`Move the dvc.services bot role above the ${label} role.`);
+  }
+}
 
 export class DiscordVerificationGateway implements VerificationGateway {
   constructor(private readonly guild: Guild, private readonly config: Config) {}
@@ -17,17 +33,8 @@ export class DiscordVerificationGateway implements VerificationGateway {
       pending: member.pending ?? false, bot: member.user.bot };
   }
 
-  async assertRoleAssignable(): Promise<void> {
-    const role = await this.guild.roles.fetch(this.config.verificationRoleId, { force: true });
-    if (!role) throw new SetupError('VERIFICATION_ROLE_ID does not exist in GUILD_ID.');
-    assertSafeVerificationRole(role, this.guild.id);
-    const me = await this.guild.members.fetchMe({ force: true, cache: false });
-    if (!me.permissions.has(PermissionFlagsBits.ManageRoles)) {
-      throw new SetupError('Give the bot Manage Roles permission.');
-    }
-    if (me.roles.highest.comparePositionTo(role) <= 0) {
-      throw new SetupError('Move the dvc.services bot role above the verification role.');
-    }
+  assertRoleAssignable(): Promise<void> {
+    return assertRoleAssignable(this.guild, this.config.verificationRoleId, 'VERIFICATION_ROLE_ID', 'verification');
   }
 
   async addRole(userId: string): Promise<void> {
@@ -36,6 +43,30 @@ export class DiscordVerificationGateway implements VerificationGateway {
       user: userId, role: this.config.verificationRoleId,
       reason: VERIFICATION_AUDIT_REASON,
     });
+  }
+}
+
+export class DiscordBulletinGateway implements BulletinGateway {
+  constructor(private readonly guild: Guild, private readonly config: Pick<Config, 'verificationRoleId'>,
+    private readonly roleId: string) {}
+
+  async getMember(userId: string) {
+    // Fetch only the clicking member; the flags come from the same single request.
+    const member = await this.guild.members.fetch({ user: userId, force: true, cache: false });
+    return { verified: member.roles.cache.has(this.config.verificationRoleId),
+      subscribed: member.roles.cache.has(this.roleId), bot: member.user.bot };
+  }
+
+  assertRoleAssignable(): Promise<void> {
+    return assertRoleAssignable(this.guild, this.roleId, 'BULLETIN_ROLE_ID', 'Bulletin');
+  }
+
+  async setRole(userId: string, subscribed: boolean): Promise<void> {
+    // Single-role PUT/DELETE calls leave every other role the member has untouched.
+    const options = { user: userId, role: this.roleId,
+      reason: subscribed ? BULLETIN_JOIN_REASON : BULLETIN_LEAVE_REASON };
+    if (subscribed) await this.guild.members.addRole(options);
+    else await this.guild.members.removeRole(options);
   }
 }
 
@@ -75,6 +106,11 @@ export async function preflight(client: Client<true>, config: Config) {
   const guild = await client.guilds.fetch(config.guildId);
   const gateway = new DiscordVerificationGateway(guild, config);
   await gateway.assertRoleAssignable();
+  let bulletinGateway: DiscordBulletinGateway | undefined;
+  if (config.bulletinRoleId) {
+    bulletinGateway = new DiscordBulletinGateway(guild, config, config.bulletinRoleId);
+    await bulletinGateway.assertRoleAssignable();
+  }
   const me = await guild.members.fetchMe();
   if (!me.permissions.has(PermissionFlagsBits.ViewAuditLog)) {
     throw new SetupError('Give the bot View Audit Log permission for v0.2.0 server activity logging.');
@@ -96,5 +132,5 @@ export async function preflight(client: Client<true>, config: Config) {
   const verificationChannel = await channel(config.verificationChannelId, 'VERIFICATION_CHANNEL_ID');
   await channel(config.commandsChannelId, 'COMMANDS_CHANNEL_ID');
   const logsChannel = await channel(config.logsChannelId, 'LOGS_CHANNEL_ID');
-  return { guild, gateway, verificationChannel, logsChannel };
+  return { guild, gateway, bulletinGateway, verificationChannel, logsChannel };
 }

@@ -1,13 +1,15 @@
-import { MessageFlags, PermissionFlagsBits, roleMention, userMention, type ButtonInteraction,
+import { MessageFlags, PermissionFlagsBits, roleMention, userMention, type ButtonBuilder, type ButtonInteraction,
   type ChatInputCommandInteraction, type Interaction } from 'discord.js';
 import type { AuditLog } from './audit.js';
+import type { BulletinResult, BulletinService } from './bulletin.js';
 import type { Config } from './config.js';
 import { SetupError } from './errors.js';
 import { errorSummary, type Logger } from './logger.js';
 import { MemberLookupLimiter, MemberReportCache, memberCard, memberView, parseMemberDetails,
   parseMemberNavigation, type MemberReport } from './member.js';
-import { Cooldown, isTrustedVerificationButton, MEMBER_CUSTOM_ID_PREFIX, VERIFY_CUSTOM_ID } from './policy.js';
-import { aboutCard, brandedTitle, card } from './ui.js';
+import { BULLETIN_JOIN_ID, BULLETIN_LEAVE_ID, Cooldown, isTrustedVerificationButton, MEMBER_CUSTOM_ID_PREFIX,
+  VERIFY_CUSTOM_ID } from './policy.js';
+import { aboutCard, brandedTitle, bulletinButton, bulletinCard, bulletinOffer, card, type CardField } from './ui.js';
 import type { VerificationResult, VerificationService } from './verification.js';
 
 export interface RouterDependencies {
@@ -17,20 +19,32 @@ export interface RouterDependencies {
   panelId: () => string | undefined;
   refreshPanel: () => Promise<{ id: string; created: boolean }>;
   verification: () => VerificationService;
+  // Absent or returning undefined when BULLETIN_ROLE_ID is not configured.
+  bulletin?: () => BulletinService | undefined;
   memberReport: (userId: string) => Promise<MemberReport | null>;
   audit: AuditLog;
   logger: Logger;
   now?: () => number;
 }
 
-const verificationReplies: Record<VerificationResult, [string, string]> = {
-  awarded: ['You’re verified', 'Welcome to dvc.labs! Your member role has been added and the community is now unlocked.'],
+// 'awarded' is built in verify() because it mentions the member and the role.
+const verificationReplies: Record<Exclude<VerificationResult, 'awarded'>, [string, string]> = {
   already_verified: ['Already verified', 'You already have access to dvc.labs. Make yourself at home.'],
   screening_pending: ['One more step', 'Please accept Discord’s server rules first, then press Verify again.'],
   bot: ['Members only', 'This verification step is for human members.'],
   processing: ['Verification in progress', 'Your first request is still being processed. Give it a moment.'],
   cooldown: ['Just a moment', 'Please wait a few seconds before trying again.'],
 };
+
+type ButtonRoute = 'verify' | 'member_page' | 'member_details' | 'bulletin_join' | 'bulletin_leave';
+
+function buttonRoute(customId: string): ButtonRoute | undefined {
+  if (customId === VERIFY_CUSTOM_ID) return 'verify';
+  if (customId === BULLETIN_JOIN_ID) return 'bulletin_join';
+  if (customId === BULLETIN_LEAVE_ID) return 'bulletin_leave';
+  if (parseMemberDetails(customId)) return 'member_details';
+  return customId.startsWith(MEMBER_CUSTOM_ID_PREFIX) ? 'member_page' : undefined;
+}
 
 export class InteractionRouter {
   private readonly commandCooldown = new Cooldown();
@@ -46,12 +60,13 @@ export class InteractionRouter {
   async handle(interaction: Interaction): Promise<void> {
     if (!interaction.isChatInputCommand() && !interaction.isButton()) return;
     // Ignore unrelated components if more features are added later.
-    if (interaction.isButton() && interaction.customId !== VERIFY_CUSTOM_ID
-      && !interaction.customId.startsWith(MEMBER_CUSTOM_ID_PREFIX)) return;
+    const route = interaction.isButton() ? buttonRoute(interaction.customId) : undefined;
+    if (interaction.isButton() && !route) return;
     try {
       if (interaction.isChatInputCommand()) await this.command(interaction);
-      else if (parseMemberDetails(interaction.customId)) await this.memberDetails(interaction);
-      else if (interaction.customId.startsWith(MEMBER_CUSTOM_ID_PREFIX)) await this.memberPage(interaction);
+      else if (route === 'member_details') await this.memberDetails(interaction);
+      else if (route === 'member_page') await this.memberPage(interaction);
+      else if (route === 'bulletin_join' || route === 'bulletin_leave') await this.bulletin(interaction, route === 'bulletin_join');
       else await this.verify(interaction);
     } catch (error) {
       this.deps.logger.write('error', 'interaction_failed', {
@@ -92,9 +107,9 @@ export class InteractionRouter {
   }
 
   private async respond(interaction: ChatInputCommandInteraction | ButtonInteraction,
-    title: string, description: string): Promise<void> {
+    title: string, description: string, extra: { fields?: CardField[]; buttons?: ButtonBuilder[] } = {}): Promise<void> {
     try {
-      const payload = card(title, description);
+      const payload = card(title, description, extra.fields, extra.buttons ? { buttons: extra.buttons } : {});
       if (interaction.deferred || interaction.replied) await interaction.editReply(payload);
       else await interaction.reply({ ...payload, flags: MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral });
     } catch (error) {
@@ -237,8 +252,7 @@ export class InteractionRouter {
   }
 
   private isStaff(interaction: ButtonInteraction): boolean {
-    return !!(interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)
-      || interaction.memberPermissions?.has(PermissionFlagsBits.ModerateMembers));
+    return !!interaction.memberPermissions?.any(PermissionFlagsBits.ManageGuild | PermissionFlagsBits.ModerateMembers);
   }
 
   private async expiredMemberCard(interaction: ButtonInteraction): Promise<void> {
@@ -317,17 +331,58 @@ export class InteractionRouter {
         detail: error instanceof SetupError ? error.message : errorSummary(error) });
       throw error;
     }
+    const verifiedTitle = brandedTitle('Member verified', config.emoji);
     audit.record({
       event: result === 'awarded' ? 'verification_succeeded' : 'verification_attempt',
-      title: result === 'awarded' ? brandedTitle('Member verified', config.emoji) : 'Verification attempt',
+      title: result === 'awarded' ? verifiedTitle : 'Verification attempt',
       outcome: result, userId: interaction.user.id, channelId: interaction.channelId,
       discord: result !== 'cooldown' && result !== 'processing',
       priority: result === 'awarded' ? 'important' : 'routine',
       ...(result === 'awarded' ? { roleId: config.verificationRoleId } : {}),
     });
-    const [title, description] = verificationReplies[result];
+    const [title, description] = result === 'awarded'
+      ? [verifiedTitle, `Welcome to dvc.labs, ${userMention(interaction.user.id)}! Your ${roleMention(config.verificationRoleId)} role has been added and the community is now unlocked.`]
+      : verificationReplies[result];
+    // Verified members (new or returning) can opt in to Bulletin pings from the same private card.
+    const offer = config.bulletinRoleId && this.deps.bulletin?.() && (result === 'awarded' || result === 'already_verified')
+      ? { fields: [bulletinOffer(config.bulletinRoleId)], buttons: [bulletinButton(true)] } : {};
     // Reply failures cannot undo the role or produce a false verification-failure log.
-    await this.respond(interaction, result === 'awarded' ? brandedTitle('Member verified', config.emoji) : title,
-      result === 'awarded' ? `Welcome to dvc.labs, ${userMention(interaction.user.id)}! Your ${roleMention(config.verificationRoleId)} role has been added and the community is now unlocked.` : description);
+    await this.respond(interaction, title, description, offer);
+  }
+
+  private async bulletin(interaction: ButtonInteraction, subscribe: boolean): Promise<void> {
+    const { config, audit } = this.deps;
+    const service = this.deps.bulletin?.();
+    const roleId = config.bulletinRoleId;
+    // The ephemeral card is bot-authored and lives in the verification channel; check that, not just the custom ID.
+    if (!service || !roleId || !this.deps.isReady() || interaction.guildId !== config.guildId
+      || interaction.channelId !== config.verificationChannelId || interaction.message.author.id !== this.deps.botId()) {
+      if (interaction.guildId === config.guildId) {
+        audit.record({ event: 'bulletin_denied', title: 'Bulletin request not accepted',
+          outcome: 'not_ready_or_invalid_message', userId: interaction.user.id, channelId: interaction.channelId, discord: false });
+      }
+      await this.respond(interaction, 'Bulletin unavailable', 'Bulletin pings are not available right now. Please try again later.');
+      return;
+    }
+    // Edit the private card in place so the button always offers the next action.
+    await interaction.deferUpdate();
+    let result: BulletinResult;
+    try { result = await service.set(interaction.user.id, subscribe); }
+    catch (error) {
+      audit.record({ event: 'bulletin_failed', title: 'Bulletin update failed', outcome: 'error',
+        userId: interaction.user.id, channelId: interaction.channelId, roleId, priority: 'critical',
+        detail: error instanceof SetupError ? error.message : errorSummary(error) });
+      throw error;
+    }
+    const changed = result === 'subscribed' || result === 'unsubscribed';
+    audit.record({
+      event: changed ? 'bulletin_updated' : 'bulletin_attempt',
+      title: changed ? brandedTitle(result === 'subscribed' ? 'Bulletin subscribed' : 'Bulletin unsubscribed', config.emoji) : 'Bulletin attempt',
+      outcome: result, userId: interaction.user.id, channelId: interaction.channelId, roleId,
+      discord: changed,
+    });
+    // A reply failure cannot undo the role change or produce a false failure log.
+    try { await interaction.editReply(bulletinCard(result, subscribe, roleId, config)); }
+    catch (error) { this.deps.logger.write('warn', 'interaction_reply_failed', { error: errorSummary(error) }); }
   }
 }

@@ -4,6 +4,14 @@ import { ComponentType, PermissionFlagsBits, PermissionsBitField } from 'discord
 export const VERIFY_CUSTOM_ID = 'dvc:verify:v1';
 export const MEMBER_CUSTOM_ID_PREFIX = 'dvc:member:v1:';
 export const VERIFICATION_AUDIT_REASON = 'dvc.services: member completed button verification';
+export const BULLETIN_JOIN_ID = 'dvc:bulletin:v1:join';
+export const BULLETIN_LEAVE_ID = 'dvc:bulletin:v1:leave';
+export const BULLETIN_JOIN_REASON = 'dvc.services: member opted in to Bulletin pings';
+export const BULLETIN_LEAVE_REASON = 'dvc.services: member opted out of Bulletin pings';
+// Role changes the bot already reports itself; their native audit entries stay in the console.
+export const OWN_ROLE_AUDIT_REASONS: ReadonlySet<string> = new Set([
+  VERIFICATION_AUDIT_REASON, BULLETIN_JOIN_REASON, BULLETIN_LEAVE_REASON,
+]);
 
 // Supports both the old action row and the nested action row in a V2 container.
 export function hasVerificationButton(components: readonly unknown[]): boolean {
@@ -67,16 +75,17 @@ const elevatedPermissions = [
   PermissionFlagsBits.MoveMembers,
 ];
 
-export function assertSafeVerificationRole(role: {
+// Roles the bot hands out on a click (verification, Bulletin) must never carry staff powers.
+export function assertSafeMemberRole(role: {
   id: string;
   managed: boolean;
   permissions: PermissionsBitField;
-}, guildId: string): void {
+}, guildId: string, label = 'verification'): void {
   if (role.id === guildId || role.managed) {
-    throw new SetupError('The verification role must be a normal member role, not @everyone or an integration role.');
+    throw new SetupError(`The ${label} role must be a normal member role, not @everyone or an integration role.`);
   }
   if (elevatedPermissions.some(permission => role.permissions.has(permission))) {
-    throw new SetupError('The verification role must not grant administrative or moderation permissions.');
+    throw new SetupError(`The ${label} role must not grant administrative or moderation permissions.`);
   }
 }
 
