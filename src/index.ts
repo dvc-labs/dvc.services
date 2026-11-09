@@ -7,6 +7,7 @@ import { clientOptions, intentFailureHint } from './client-options.js';
 import { loadConfig, type Config } from './config.js';
 import { discordPanelRepository, preflight } from './discord.js';
 import { SetupError } from './errors.js';
+import { HallClient } from './hall.js';
 import { createHealthServer } from './health.js';
 import { errorSummary, Logger } from './logger.js';
 import { loadMemberReport } from './member.js';
@@ -24,6 +25,10 @@ catch (error) {
 }
 
 const logger = new Logger(config.logLevel, config.token);
+const hall = config.hallWorkerUrl && config.hallApiKey ? new HallClient(config.hallWorkerUrl, config.hallApiKey) : undefined;
+if (!hall && (config.hallWorkerUrl || config.hallApiKey)) {
+  logger.write('warn', 'hall_setup_incomplete', { detail: `Set ${config.hallWorkerUrl ? 'HALLAI_API_KEY' : 'WORKER_URL'} to enable /ask and /forget.` });
+}
 const audit = new AuditLog(logger);
 const client = new Client({
   ...clientOptions(),
@@ -44,6 +49,7 @@ async function shutdown(reason: string, code: number): Promise<void> {
   stopping = true;
   operational = false;
   activity.stop();
+  hall?.close();
   const forcedExit = setTimeout(() => process.exit(code), 8_000);
   forcedExit.unref();
   audit.record({ event: 'bot_stopping', title: 'dvc.services stopping', outcome: reason, priority: 'critical' });
@@ -81,11 +87,12 @@ async function initialise(readyClient: Client<true>): Promise<void> {
   operational = true;
   audit.record({ event: 'bot_online', title: 'dvc.services online', outcome: 'ready', priority: 'critical',
     detail: `v${VERSION} is ready in dvc.labs. Verification, member lookups, welcome DMs, and server activity logs are available.`
-      + (bulletin ? ' Optional Bulletin pings are enabled.' : '') });
+      + (bulletin ? ' /bulletin is enabled.' : '') + (hall ? ' /ask and /forget are configured.' : '') });
 }
 
 const router = new InteractionRouter({
   config, audit, logger,
+  ...(hall ? { hall } : {}),
   botId: () => client.user?.id ?? '',
   isReady: () => operational && !stopping && client.isReady(),
   panelId: () => currentPanelId,

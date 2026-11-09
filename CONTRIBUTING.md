@@ -43,9 +43,10 @@ The test suite uses mocks and a local HTTP server; it requires no Discord token.
 For Discord-facing changes, manually test in the separate server:
 
 - A normal member verifies and receives only the intended role.
-- Repeated clicks do not cause duplicate awards; already verified members get an acknowledgement.
+- Verify acknowledges existing verification and configured admin roles without writing roles. Remove both roles and confirm the normal verification path works again.
 - Pending screening and invalid role hierarchy are handled safely.
-- With `BULLETIN_ROLE_ID` set: Verify (and Verify again as an existing member) offers **Get Bulletin pings**; pressing it adds only that role and edits the same private card to **Stop Bulletin pings**; pressing that removes it. Unverified accounts cannot opt in, rapid presses show a short wait, and a role above the bot or with moderation permissions stops startup with a clear operator log. With the variable empty no Bulletin button appears.
+- With `BULLETIN_ROLE_ID` set: open `/bulletin` and change the role in Discord between opens to check the live status. Only the owner can use the private card. The buttons change only the Bulletin role, reject opt-ins without access, and allow existing subscribers to opt out after access is removed. Older verification cards should direct members to `/bulletin` without changing roles.
+- With Hall configured: test `/ask` with a public and private question, a long answer, reset and `/forget` in both modes. Verify that private continuations remain private and no transcript or integration secret is written to logs. Missing configuration and upstream errors should leave the rest of the bot available.
 - `/about` works in the configured commands channel.
 - `/member user:@someone` works publicly for ordinary members without publishing sensitive pages. Staff details are ephemeral and require Manage Server or Moderate Members. Revoke that permission and confirm further private pages are denied. Verify snapshot expiry, no repeated member/profile fetches on page changes, shared API limits, and voice-channel redaction.
 - Hostile nicknames/statuses cannot create links, subtext, formatting, quotes, or mentions. Check bidi removal and code-point truncation. Denied clicks, join/DM bursts, and success floods cannot displace failure/lifecycle records.

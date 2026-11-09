@@ -14,10 +14,10 @@ function fixture(member = { verified: true, subscribed: false, bot: false }) {
 
 test('verified members can subscribe and unsubscribe, changing only their own role', async () => {
   const f = fixture();
-  assert.equal(await f.service.set('clicking-user', true), 'subscribed');
+  assert.deepEqual(await f.service.set('clicking-user', true), { outcome: 'subscribed', status: 'on' });
   assert.deepEqual(f.writes, [['clicking-user', true]]);
   const g = fixture({ verified: true, subscribed: true, bot: false });
-  assert.equal(await g.service.set('clicking-user', false), 'unsubscribed');
+  assert.deepEqual(await g.service.set('clicking-user', false), { outcome: 'unsubscribed', status: 'off' });
   assert.deepEqual(g.writes, [['clicking-user', false]]);
 });
 
@@ -29,14 +29,15 @@ test('unchanged, unverified, and bot requests never produce a role write', async
     [{ verified: true, subscribed: false, bot: true }, true, 'bot'],
   ] as const) {
     const f = fixture(member);
-    assert.equal(await f.service.set('member', subscribe), result);
+    assert.equal((await f.service.set('member', subscribe)).outcome, result);
     assert.deepEqual(f.writes, []);
   }
 });
 
 test('members who lost the verification role can still opt out', async () => {
   const f = fixture({ verified: false, subscribed: true, bot: false });
-  assert.equal(await f.service.set('member', false), 'unsubscribed');
+  assert.equal(await f.service.status('member'), 'on');
+  assert.deepEqual(await f.service.set('member', false), { outcome: 'unsubscribed', status: 'not_verified' });
 });
 
 test('concurrent presses perform one write, then the cooldown applies until it expires', async () => {
@@ -45,12 +46,12 @@ test('concurrent presses perform one write, then the cooldown applies until it e
   const pending = new Promise<void>(resolve => { release = resolve; });
   f.gateway.getMember = async () => { await pending; return { verified: true, subscribed: false, bot: false }; };
   const first = f.service.set('member', true);
-  assert.equal(await f.service.set('member', true), 'processing');
+  assert.equal((await f.service.set('member', true)).outcome, 'processing');
   release();
-  assert.equal(await first, 'subscribed');
+  assert.equal((await first).outcome, 'subscribed');
   assert.deepEqual(f.writes, [['member', true]]);
-  assert.equal(await f.service.set('member', false), 'cooldown');
-  assert.equal(await f.service.set('someone-else', true), 'subscribed');
+  assert.equal((await f.service.set('member', false)).outcome, 'cooldown');
+  assert.equal((await f.service.set('someone-else', true)).outcome, 'subscribed');
 });
 
 test('an unassignable role prevents every write, and a failed write is never reported as success', async () => {

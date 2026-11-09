@@ -2,10 +2,11 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType, Collection, MessageFlags,
   PermissionFlagsBits, PermissionsBitField, type Client, type TextChannel } from 'discord.js';
-import { DiscordBulletinGateway, discordPanelRepository, preflight } from '../src/discord.js';
+import { DiscordBulletinGateway, DiscordVerificationGateway, discordPanelRepository, preflight } from '../src/discord.js';
 import { ensureVerificationPanel } from '../src/panel.js';
 import { BULLETIN_JOIN_REASON, BULLETIN_LEAVE_REASON, VERIFY_CUSTOM_ID } from '../src/policy.js';
 import { testConfig } from './helpers.js';
+import { VerificationService } from '../src/verification.js';
 
 function preflightFixture() {
   const config = testConfig();
@@ -95,6 +96,42 @@ test('startup validates the optional Bulletin role: it exists, is safe to self-a
   above.roles.set(bulletinRoleId, bulletinRole);
   above.hierarchy.set(bulletinRoleId, 0);
   await assert.rejects(preflight(above.client, above.config), /above the Bulletin role/);
+});
+
+test('the configured admin role must exist but may carry staff permissions and sit above the bot', async () => {
+  const f = preflightFixture();
+  const id = '888888888888888888';
+  Object.assign(f.config, { adminRoleId: id });
+  await assert.rejects(preflight(f.client, f.config), /ADMIN_ROLE_ID does not exist/);
+  f.roles.set(id, { id, managed: false, permissions: new PermissionsBitField(PermissionFlagsBits.Administrator) });
+  f.hierarchy.set(id, -1);
+  await preflight(f.client, f.config);
+});
+
+test('a fresh verification or admin role means access; only losing both allows a new verification award', async () => {
+  const config = { ...testConfig(), adminRoleId: '888888888888888888' };
+  const roles = new Set([config.adminRoleId]);
+  const writes: unknown[] = [];
+  const guild = { id: config.guildId, members: {
+    fetch: async (options: unknown) => {
+      assert.equal((options as { force: boolean }).force, true);
+      return { roles: { cache: roles }, user: { bot: false } };
+    },
+    addRole: async (options: unknown) => { writes.push(options); },
+  } };
+  const gateway = new DiscordVerificationGateway(guild as never, config);
+  gateway.assertRoleAssignable = async () => {};
+  const bulletin = new DiscordBulletinGateway(guild as never, config, '999999999999999999');
+  assert.equal((await bulletin.getMember('staff')).verified, true);
+  assert.equal(await new VerificationService(gateway).verify('staff'), 'already_verified');
+  assert.equal(writes.length, 0);
+  roles.delete(config.adminRoleId);
+  roles.add(config.verificationRoleId);
+  assert.equal(await new VerificationService(gateway).verify('staff'), 'already_verified');
+  roles.clear();
+  assert.equal(await new VerificationService(gateway).verify('staff'), 'awarded');
+  assert.equal(writes.length, 1);
+  assert.equal((writes[0] as { role: string }).role, config.verificationRoleId);
 });
 
 test('the Bulletin gateway reads both flags from one member fetch and changes a single role with an audit reason', async () => {

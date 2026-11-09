@@ -5,7 +5,7 @@ import { SetupError } from './errors.js';
 import type { PanelMessage, PanelRepository } from './panel.js';
 import type { BulletinGateway } from './bulletin.js';
 import { assertSafeMemberRole, BULLETIN_JOIN_REASON, BULLETIN_LEAVE_REASON, hasVerificationButton,
-  VERIFICATION_AUDIT_REASON } from './policy.js';
+  serverAccessRole, VERIFICATION_AUDIT_REASON, type AccessRoles } from './policy.js';
 import { verificationPanel } from './ui.js';
 import type { VerificationGateway } from './verification.js';
 
@@ -29,7 +29,7 @@ export class DiscordVerificationGateway implements VerificationGateway {
   async getMember(userId: string) {
     // Fetch only the clicking member; never download the member list for verification.
     const member = await this.guild.members.fetch({ user: userId, force: true, cache: false });
-    return { hasRole: member.roles.cache.has(this.config.verificationRoleId),
+    return { hasAccess: serverAccessRole(member.roles.cache, this.config) !== undefined,
       pending: member.pending ?? false, bot: member.user.bot };
   }
 
@@ -47,13 +47,13 @@ export class DiscordVerificationGateway implements VerificationGateway {
 }
 
 export class DiscordBulletinGateway implements BulletinGateway {
-  constructor(private readonly guild: Guild, private readonly config: Pick<Config, 'verificationRoleId'>,
+  constructor(private readonly guild: Guild, private readonly config: AccessRoles,
     private readonly roleId: string) {}
 
   async getMember(userId: string) {
     // Fetch only the clicking member; the flags come from the same single request.
     const member = await this.guild.members.fetch({ user: userId, force: true, cache: false });
-    return { verified: member.roles.cache.has(this.config.verificationRoleId),
+    return { verified: serverAccessRole(member.roles.cache, this.config) !== undefined,
       subscribed: member.roles.cache.has(this.roleId), bot: member.user.bot };
   }
 
@@ -106,6 +106,9 @@ export async function preflight(client: Client<true>, config: Config) {
   const guild = await client.guilds.fetch(config.guildId);
   const gateway = new DiscordVerificationGateway(guild, config);
   await gateway.assertRoleAssignable();
+  if (config.adminRoleId && !await guild.roles.fetch(config.adminRoleId, { force: true })) {
+    throw new SetupError('ADMIN_ROLE_ID does not exist in GUILD_ID.');
+  }
   let bulletinGateway: DiscordBulletinGateway | undefined;
   if (config.bulletinRoleId) {
     bulletinGateway = new DiscordBulletinGateway(guild, config, config.bulletinRoleId);

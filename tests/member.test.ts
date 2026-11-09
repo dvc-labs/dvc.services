@@ -52,6 +52,15 @@ test('member pages show exact native references, real dates, permissions, and ho
   assert.match(text, /Not set/);
 });
 
+test('a member with the configured staff role shows access without the verification role', () => {
+  const f = fixture();
+  const adminRoleId = '333333333333333334';
+  Object.assign(f.config, { adminRoleId });
+  f.member.roles.cache.delete(f.config.verificationRoleId);
+  const verification = f.report().pages[0]!.fields.find(field => field.name === 'Verification');
+  assert.equal(verification?.value, `Access via <@&${adminRoleId}>`);
+});
+
 test('every role and permission remains available and all V2 pages fit the message limit for large profiles', () => {
   const f = fixture(250);
   f.member.nickname = '@everyone **spoof**';
