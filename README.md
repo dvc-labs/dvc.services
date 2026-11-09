@@ -3,14 +3,15 @@
 The Discord service bot for **dvc.labs** — a home for dvc. projects, experiments, and a look behind the scenes.
 
 [![CI](https://github.com/dvc-labs/dvc.services/actions/workflows/ci.yml/badge.svg)](https://github.com/dvc-labs/dvc.services/actions/workflows/ci.yml)
-![Version](https://img.shields.io/badge/version-0.2.1-26bcc5)
+![Version](https://img.shields.io/badge/version-0.2.2-26bcc5)
 ![Node.js](https://img.shields.io/badge/Node.js-24_LTS-26bcc5)
 [![MIT](https://img.shields.io/badge/license-MIT-26bcc5)](LICENSE)
 
-## v0.2.1
+## v0.2.2
 
-- Optional **Bulletin pings**. After **Verify**, the private verification card offers a **Get Bulletin pings** button. Pressing it gives the member the role in `BULLETIN_ROLE_ID` and edits the same card in place to **Stop Bulletin pings**, so opting out is one press too. Already verified members see the same offer when they press Verify again. Leave `BULLETIN_ROLE_ID` empty to switch the feature off.
-- Internal tidy-ups: one shared role-safety and hierarchy check for every role the bot hands out, a single button-routing table, a dead copy entry removed from the verification replies, one title helper for activity logs, and a simpler staff-permission check. No other behaviour changes.
+- `/ask` uses the same Hall Worker as [CityMart Services](https://github.com/dvc-labs/CityMart-Services). It shows your question and the AI's answer on teal Components V2 cards, with optional private replies, follow-up context, and a reset. `/forget` clears the selected conversation.
+- `/bulletin` opens a separate private preference card. It reads current role membership, so existing subscribers and members whose roles changed outside the bot see the right action. The verification panel and its replies focus on server access.
+- An optional `ADMIN_ROLE_ID` counts as existing access, including in `/member` and `/bulletin`. Verify acknowledges anyone who already has access without adding a role. The bot never grants the admin role.
 
 ## v0.2.0
 
@@ -36,17 +37,21 @@ The bot registers its own **guild commands** on startup, updating them only when
 
 | Action | Who can use it | Where | Result |
 | --- | --- | --- | --- |
-| **Verify** button | Human server members | Current panel in `VERIFICATION_CHANNEL_ID` | Grants `VERIFICATION_ROLE_ID` and replies privately |
-| **Get / Stop Bulletin pings** button | Verified human members | Private verification card, when `BULLETIN_ROLE_ID` is set | Adds or removes the Bulletin role for the clicking member only; the card updates in place |
+| **Verify** button | Human server members | Current panel in `VERIFICATION_CHANNEL_ID` | Grants `VERIFICATION_ROLE_ID` only if access is needed; replies privately |
+| `/bulletin` | Human server members | `COMMANDS_CHANNEL_ID` | Private subscription card, when `BULLETIN_ROLE_ID` is set |
+| `/ask prompt [private] [reset]` | Members with access to application commands | `COMMANDS_CHANNEL_ID` | Question and Hall's answer on V2 cards; public by default |
+| `/forget [private]` | Members with access to application commands | `COMMANDS_CHANNEL_ID` | Clears public or private Hall context for the caller in this channel; confirms privately |
 | `/about` | Members with access to application commands | `COMMANDS_CHANNEL_ID` | Public information card |
 | `/member user:@someone` | All members with access to application commands | `COMMANDS_CHANNEL_ID` | Public, paginated member information |
 | `/verification` | Members with **Manage Server** | `COMMANDS_CHANNEL_ID` | Creates or refreshes the panel; replies privately |
 
-The button works after process restarts without collectors or expiry timers. Startup refreshes the existing panel with the latest instructions, reusing the same button ID (`dvc:verify:v1`). Requests are restricted to the configured server, channel, and current bot-authored message. The bot replies privately, fetches only the clicking member, and adds one role without replacing their other roles. Already verified members receive a friendly acknowledgement. Members with pending Discord rules screening must finish that first.
+The button works after process restarts without collectors or expiry timers. Startup refreshes the existing panel with the latest instructions, reusing the same button ID (`dvc:verify:v1`). Requests are restricted to the configured server, channel, and current bot-authored message. The bot fetches only the clicking member and checks their current roles. Members who hold `VERIFICATION_ROLE_ID` or `ADMIN_ROLE_ID` get a private acknowledgement and no role write. Members who need verification must complete any pending Discord screening first.
 
 Stop the old instance before upgrading. Forms opened on older releases are ignored; close the old form and press **Verify** again. The existing panel is converted to V2 with its legacy fields cleared. Discord does not allow reverting that message to legacy format, so rolling back to a pre-v0.2.0 build requires a new legacy panel.
 
-Role assignability is checked at startup and before each new award. The bot refuses `@everyone`, integration-managed roles, and roles with administrative or moderation permissions. Put the bot's highest role **above** the ordinary verification/member role. The optional Bulletin role gets the same checks (it must also be a different role from the verification role), and the bot must sit above it too. Opting in requires the verification role; opting out is always allowed. Bulletin presses are limited to one change per member every three seconds and are accepted only from the bot's own private card in the verification channel.
+Role assignability is checked at startup and before each change. Use ordinary roles for verification and Bulletin, and place both below the bot's highest role. The bot rejects `@everyone`, integration-managed roles, and roles with administrative or moderation permissions. `ADMIN_ROLE_ID` must be a separate existing role. It can be above the bot because the bot only checks membership. Discord channel overrides and staff command permissions still apply independently.
+
+`/bulletin` fetches current membership when the card opens and before every change. Opting in requires verification or the configured admin role; a subscriber who loses access can still opt out. The card edits in place and only its owner can use it. Actions are limited to once every three seconds. Buttons on old verification receipts direct members to `/bulletin` without changing roles.
 
 `/member` fetches only the selected member and their public user profile. Lookups are limited to once per user every **10 seconds**. Public profiles remain in the commands channel. Page changes use a stable **two-minute per-message snapshot**, are limited to once every **two seconds**, and **do not refetch member/profile data**. The snapshot cache holds at most 100 reports; expired/evicted reports ask for a new lookup. Lookups, page edits, and private detail requests share a token bucket with five initial operations, one refill every two seconds, and a two-operation concurrency cap. Private-detail requests share the two-second per-user page interval. Discord.js also handles Discord's REST rate limits.
 
@@ -54,7 +59,7 @@ Only the original requester can turn a report's pages. Guild, channel, bot autho
 
 Missing presence is shown as **not observed**, rather than inferred offline. Presence, devices, activities, voice state, effective permissions, and the bot's hierarchy capabilities appear only in the private staff view. Restricted voice-channel names/IDs remain omitted there too. Permissions are server-wide; channel overrides still apply. Email addresses, IPs, and MFA settings are not available through the lookup.
 
-v0.2.0 requires **Presence** and **Server Members** intents in the Developer Portal. **Message Content can remain disabled.** Intent hints are logged only for a DisallowedIntents error or close code 4014. Its server permissions are View Channels, Send Messages, Embed Links, Read Message History, Manage Roles, and View Audit Log (combined value `268520576`). The install scopes remain `bot` and `applications.commands`; sending DMs needs no extra OAuth scope. Administrator is unnecessary. Keep the log channel private and grant history access in all three configured channels.
+The bot requires **Presence** and **Server Members** intents in the Developer Portal. **Message Content can remain disabled.** Intent hints are logged only for a DisallowedIntents error or close code 4014. Its server permissions are View Channels, Send Messages, Embed Links, Read Message History, Manage Roles, and View Audit Log (combined value `268520576`). The install scopes remain `bot` and `applications.commands`. No new scopes, permissions, or privileged intents are needed for v0.2.2. Keep the log channel private and grant history access in all three configured channels.
 
 ## Environment variables
 
@@ -66,11 +71,14 @@ Copy [`.env.example`](.env.example) for local or Docker Compose use. On your hos
 | `GUILD_ID` | Yes | Your server ID | dvc.labs server |
 | `APPLICATION_ID` | Yes | Your application ID | Discord application |
 | `VERIFICATION_ROLE_ID` | Yes | Your role ID | Ordinary member/access role |
+| `ADMIN_ROLE_ID` | No | Empty | Existing staff role that counts as access; never assigned by the bot |
 | `VERIFICATION_CHANNEL_ID` | Yes | Your channel ID | Welcome and verification text channel |
 | `COMMANDS_CHANNEL_ID` | Yes | Your channel ID | Slash-command text channel |
 | `LOGS_CHANNEL_ID` | Yes | Your channel ID | Preferably private team logs text channel |
 | `VERIFICATION_MESSAGE_ID` | No | Empty | Select an existing bot-authored verification panel explicitly |
-| `BULLETIN_ROLE_ID` | No | Empty | Optional self-service news-ping role offered after verification; empty disables the Bulletin button |
+| `BULLETIN_ROLE_ID` | No | Empty | Optional news-ping role managed through `/bulletin` |
+| `WORKER_URL` | For Hall only | Empty | Hall v2 HTTPS origin, e.g. `https://hall.davevancauwenberghe.be` |
+| `HALLAI_API_KEY` | For Hall only, secret | Empty | Matches the Hall Worker's `DISCORD_API_KEY` |
 | `PORT` | No | `8080` | Internal health server, bound to `0.0.0.0`; use the host's assigned port if needed |
 | `LOG_LEVEL` | No | `info` | `debug`, `info`, `warn`, or `error`; filters console output only |
 | `DVC_EMOJI` | No | `<:dvc:1566457051465388194>` | Application-owned emoji for headings/buttons; use your test app's emoji or `none` to disable |
@@ -81,6 +89,16 @@ Copy [`.env.example`](.env.example) for local or Docker Compose use. On your hos
 The seven Discord connection variables must be supplied at runtime; replace the example's ID placeholders with your server's IDs. `DVC_EMOJI` is optional: unset or blank keeps the official dvc. branding, including when copying `.env.example`. Explicitly set it to `none` to disable branding, or to an application-owned emoji for a separate test app. No client secret, public key, OAuth redirect URI, webhook URL, database, or persistent volume is needed. The brand colour is defined in source.
 
 Leave `VERIFICATION_MESSAGE_ID` empty for automatic discovery. If set, it must reference an existing panel from this application in the configured verification channel. A missing or invalid explicit ID stops startup rather than creating a duplicate. Clear it to allow recovery or use the correct ID.
+
+## Hall setup and privacy
+
+Copy `WORKER_URL` and `HALLAI_API_KEY` from your working CityMart Services configuration into the bot's **runtime** environment. The Worker keeps its `OPENAI_API_KEY`; dvc.services only needs the matching Discord integration secret. Both settings are needed for `/ask` and `/forget`. Leave both empty to disable Hall while keeping the rest of the bot available. A missing half of the configuration produces an operator warning without revealing credentials.
+
+Try `/ask prompt:What is dvc.labs?` in the commands channel. Set `private:true` to make the question, answer and continuation cards visible only to you in Discord. Ask follow-up questions in the same reply mode. `reset:true` starts fresh before asking; `/forget private:true` clears private context, and `/forget` clears public context. Clearing context does not delete previously posted Discord messages.
+
+The bot sends the submitted question and the caller's guild, channel, user ID, and visibility to Hall. The Worker handles OpenAI, moderation, web search, and conversation memory. Context is scoped to those Discord identifiers and visibility, so two bots using the same Worker can share context for the same scope. The bot does not store a separate transcript. Console logs record command outcomes and safe diagnostics only. Discord reply privacy does not prevent processing by Hall or OpenAI; describe both providers and the Worker's retention in your published privacy notice before enabling the commands.
+
+Questions are limited to 1,000 characters. Hall requests are limited to one per member every 12 seconds and two in flight for the bot, with an 80-second timeout and no generation retries. Long answers use additional cards in the same reply mode, preserving complete source links that fit and continuing fenced code. No new package, volume, or build command is required.
 
 ## Logs and data
 

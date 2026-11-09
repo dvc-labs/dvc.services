@@ -3,7 +3,7 @@ import {
   type Guild, type GuildMember, type User,
 } from 'discord.js';
 import type { Config } from './config.js';
-import { MEMBER_CUSTOM_ID_PREFIX } from './policy.js';
+import { MEMBER_CUSTOM_ID_PREFIX, serverAccessRole } from './policy.js';
 import { brandedTitle, card, discordTime, displayText, humanise, type CardField } from './ui.js';
 
 export interface MemberPage { title: string; fields: CardField[]; staffOnly?: boolean }
@@ -28,6 +28,7 @@ function profileLink(label: string, url: string | null | undefined): string {
 
 export function buildMemberReport(member: GuildMember, user: User, config: Config): MemberReport {
   const pages: MemberPage[] = [];
+  const accessRole = serverAccessRole(member.roles.cache, config);
   // Split by rendered length, not role count: even a 250-role member stays within V2 limits.
   function addPage(title: string, fields: CardField[], staffOnly = false): void {
     let part: CardField[] = [];
@@ -49,7 +50,7 @@ export function buildMemberReport(member: GuildMember, user: User, config: Confi
     { name: 'Account type', value: user.system ? 'Discord system account' : user.bot ? 'Bot' : 'Member' },
     { name: 'Account created', value: discordTime(user.createdTimestamp) },
     { name: 'Joined dvc.labs', value: discordTime(member.joinedTimestamp) },
-    { name: 'Verification', value: member.roles.cache.has(config.verificationRoleId) ? `Has ${roleMention(config.verificationRoleId)}` : 'Not verified' },
+    { name: 'Verification', value: accessRole ? `Access via ${roleMention(accessRole)}` : 'Not verified' },
   ]);
   addPage('Server membership', [
     { name: 'Server owner', value: yesNo(member.guild.ownerId === user.id) },

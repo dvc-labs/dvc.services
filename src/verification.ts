@@ -1,7 +1,7 @@
 import { Cooldown } from './policy.js';
 
 export interface VerificationGateway {
-  getMember(userId: string): Promise<{ hasRole: boolean; pending: boolean; bot: boolean }>;
+  getMember(userId: string): Promise<{ hasAccess: boolean; pending: boolean; bot: boolean }>;
   assertRoleAssignable(): Promise<void>;
   addRole(userId: string): Promise<void>;
 }
@@ -21,8 +21,8 @@ export class VerificationService {
     try {
       const member = await this.gateway.getMember(userId);
       if (member.bot) return 'bot';
+      if (member.hasAccess) return 'already_verified';
       if (member.pending) return 'screening_pending';
-      if (member.hasRole) return 'already_verified';
       await this.gateway.assertRoleAssignable();
       // This port only accepts the clicking user, never an arbitrary target or role.
       await this.gateway.addRole(userId);

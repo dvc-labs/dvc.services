@@ -7,12 +7,15 @@ export interface Config {
   readonly guildId: string;
   readonly applicationId: string;
   readonly verificationRoleId: string;
+  readonly adminRoleId: string | undefined;
   readonly verificationChannelId: string;
   readonly commandsChannelId: string;
   readonly logsChannelId: string;
   readonly verificationMessageId: string | undefined;
-  // Optional self-service news-ping role offered after verification; absent disables the feature.
+  // Optional self-service news-ping role managed through /bulletin.
   readonly bulletinRoleId: string | undefined;
+  readonly hallWorkerUrl: string | undefined;
+  readonly hallApiKey: string | undefined;
   readonly port: number;
   readonly logLevel: LogLevel;
   readonly emoji: string;
@@ -24,6 +27,16 @@ function snowflake(env: NodeJS.ProcessEnv, key: string): string {
     throw new SetupError(`${key} must be a valid Discord ID (17–20 digits).`);
   }
   return value;
+}
+
+function workerOrigin(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  const url = URL.parse(value);
+  if (!url || url.protocol !== 'https:' || url.username || url.password
+    || url.pathname !== '/' || url.search || url.hash) {
+    throw new SetupError('WORKER_URL must be the Hall Worker HTTPS origin, without credentials, a path, or query parameters.');
+  }
+  return url.origin;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
@@ -51,12 +64,15 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     guildId: snowflake(env, 'GUILD_ID'),
     applicationId: snowflake(env, 'APPLICATION_ID'),
     verificationRoleId: snowflake(env, 'VERIFICATION_ROLE_ID'),
+    adminRoleId: env.ADMIN_ROLE_ID?.trim() ? snowflake(env, 'ADMIN_ROLE_ID') : undefined,
     verificationChannelId: snowflake(env, 'VERIFICATION_CHANNEL_ID'),
     commandsChannelId: snowflake(env, 'COMMANDS_CHANNEL_ID'),
     logsChannelId: snowflake(env, 'LOGS_CHANNEL_ID'),
     verificationMessageId: env.VERIFICATION_MESSAGE_ID?.trim()
       ? snowflake(env, 'VERIFICATION_MESSAGE_ID') : undefined,
     bulletinRoleId: env.BULLETIN_ROLE_ID?.trim() ? snowflake(env, 'BULLETIN_ROLE_ID') : undefined,
+    hallWorkerUrl: workerOrigin(env.WORKER_URL?.trim()),
+    hallApiKey: env.HALLAI_API_KEY?.trim() || undefined,
     port,
     logLevel: logLevel as LogLevel,
     emoji,
@@ -67,6 +83,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   if (config.bulletinRoleId
     && (config.bulletinRoleId === config.guildId || config.bulletinRoleId === config.verificationRoleId)) {
     throw new SetupError('BULLETIN_ROLE_ID must be its own role, not @everyone or VERIFICATION_ROLE_ID.');
+  }
+  if (config.adminRoleId && [config.guildId, config.verificationRoleId, config.bulletinRoleId].includes(config.adminRoleId)) {
+    throw new SetupError('ADMIN_ROLE_ID must be its own role, not @everyone, VERIFICATION_ROLE_ID, or BULLETIN_ROLE_ID.');
   }
   if (new Set([config.verificationChannelId, config.commandsChannelId, config.logsChannelId]).size !== 3) {
     throw new SetupError('Use separate verification, commands, and private logs channels.');

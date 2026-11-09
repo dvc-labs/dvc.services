@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { VerificationService, type VerificationGateway } from '../src/verification.js';
 
-function fixture(member = { hasRole: false, pending: false, bot: false }) {
+function fixture(member = { hasAccess: false, pending: false, bot: false }) {
   const awarded: string[] = [];
   const gateway: VerificationGateway = {
     getMember: async () => member,
@@ -20,9 +20,9 @@ test('successful verification awards only the clicking member', async () => {
 
 test('already verified, screening-pending, and bot members never get a role write', async () => {
   for (const [member, result] of [
-    [{ hasRole: true, pending: false, bot: false }, 'already_verified'],
-    [{ hasRole: false, pending: true, bot: false }, 'screening_pending'],
-    [{ hasRole: false, pending: false, bot: true }, 'bot'],
+    [{ hasAccess: true, pending: false, bot: false }, 'already_verified'],
+    [{ hasAccess: false, pending: true, bot: false }, 'screening_pending'],
+    [{ hasAccess: false, pending: false, bot: true }, 'bot'],
   ] as const) {
     const { service, awarded } = fixture(member);
     assert.equal(await service.verify('member'), result);
@@ -36,7 +36,7 @@ test('concurrent clicks by the same member perform one role write', async () => 
   const pending = new Promise<void>(resolve => { release = resolve; });
   gateway.getMember = async () => {
     await pending;
-    return { hasRole: false, pending: false, bot: false };
+    return { hasAccess: false, pending: false, bot: false };
   };
   const first = service.verify('member');
   assert.equal(await service.verify('member'), 'processing');

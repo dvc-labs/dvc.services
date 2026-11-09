@@ -1,22 +1,24 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { MessageFlags, PermissionFlagsBits, PermissionsBitField, type Interaction } from 'discord.js';
+import { MessageFlags, MessageFlagsBitField, PermissionFlagsBits, PermissionsBitField, type Interaction } from 'discord.js';
 import { AuditLog, type AuditEvent } from '../src/audit.js';
 import type { Config } from '../src/config.js';
 import { SetupError } from '../src/errors.js';
+import { HallError, type HallReply } from '../src/hall.js';
 import { Logger } from '../src/logger.js';
 import { memberDetailsId, memberNavigationId, type MemberReport } from '../src/member.js';
 import { BulletinService, type BulletinGateway } from '../src/bulletin.js';
-import { BULLETIN_JOIN_ID, BULLETIN_LEAVE_ID, VERIFY_CUSTOM_ID } from '../src/policy.js';
+import { bulletinActionId, VERIFY_CUSTOM_ID } from '../src/policy.js';
 import { InteractionRouter, type RouterDependencies } from '../src/router.js';
 import { VerificationService, type VerificationGateway } from '../src/verification.js';
 import { messageText } from './helpers.js';
 
 function fixture(kind: 'command' | 'button' | 'modal' = 'button') {
   const config: Config = {
-    token: 'test', guildId: 'guild', applicationId: 'bot', verificationRoleId: 'member-role',
+    token: 'test', guildId: 'guild', applicationId: 'bot', verificationRoleId: 'member-role', adminRoleId: undefined,
     verificationChannelId: 'verification', commandsChannelId: 'commands', logsChannelId: 'logs',
-    verificationMessageId: undefined, bulletinRoleId: undefined, port: 8080, logLevel: 'error', emoji: '',
+    verificationMessageId: undefined, bulletinRoleId: undefined, hallWorkerUrl: undefined, hallApiKey: undefined,
+    port: 8080, logLevel: 'error', emoji: '',
   };
   const events: AuditEvent[] = [];
   const awarded: string[] = [];
@@ -28,7 +30,7 @@ function fixture(kind: 'command' | 'button' | 'modal' = 'button') {
   const audit = new AuditLog(logger);
   audit.setSink(async event => { events.push(event); });
   const gateway: VerificationGateway = {
-    getMember: async () => ({ hasRole: false, pending: false, bot: false }),
+    getMember: async () => ({ hasAccess: false, pending: false, bot: false }),
     assertRoleAssignable: async () => {},
     addRole: async id => { awarded.push(id); },
   };
@@ -49,12 +51,14 @@ function fixture(kind: 'command' | 'button' | 'modal' = 'button') {
   const raw = {
     kind,
     guildId: 'guild', channelId: kind === 'command' ? 'commands' : 'verification',
-    user: { id: 'member' }, message: { id: 'panel', author: { id: 'bot' } },
+    user: { id: 'member' }, message: { id: 'panel', author: { id: 'bot' }, flags: new MessageFlagsBitField() },
     customId: kind === 'modal' ? 'dvc:verify:form:v1:member:panel' : VERIFY_CUSTOM_ID,
     commandName: 'about', memberPermissions: new PermissionsBitField(),
     resolvedMember: { id: '777777777777777777' } as { id: string } | null,
-    options: { getUser: () => ({ id: '777777777777777777' }), getMember: () => raw.resolvedMember },
-    deferred: false, replied: false, ephemeral: null as boolean | null, sourceEphemeral: false, responseId: 'reply-0',
+    prompt: 'How does verification work?', privateReply: false, resetContext: false,
+    options: { getUser: () => ({ id: '777777777777777777' }), getMember: () => raw.resolvedMember,
+      getString: (): string => raw.prompt, getBoolean: (name: string): boolean => name === 'private' ? raw.privateReply : raw.resetContext },
+    deferred: false, replied: false, ephemeral: null as boolean | null, responseId: 'reply-0',
     isChatInputCommand: () => raw.kind === 'command', isButton: () => raw.kind === 'button',
     isModalSubmit: () => raw.kind === 'modal',
     async reply(payload: unknown) { raw.replied = true; raw.ephemeral = !!((payload as { flags?: number }).flags! & MessageFlags.Ephemeral); replies.push(payload); },
@@ -62,7 +66,7 @@ function fixture(kind: 'command' | 'button' | 'modal' = 'button') {
       raw.deferred = true; raw.ephemeral = !!((payload as { flags?: number }).flags! & MessageFlags.Ephemeral);
       raw.responseId = `reply-${++responseCount}`; replies.push(payload);
     },
-    async deferUpdate() { raw.deferred = true; raw.ephemeral = raw.sourceEphemeral; raw.responseId = raw.message.id; replies.push({ deferUpdate: true }); },
+    async deferUpdate() { raw.deferred = true; raw.responseId = raw.message.id; replies.push({ deferUpdate: true }); },
     async editReply(payload: unknown) { raw.replied = true; replies.push(payload); return { id: raw.responseId }; },
     async deleteReply() { deleted.push(raw.responseId); },
     async followUp(payload: unknown) {
@@ -75,8 +79,12 @@ function fixture(kind: 'command' | 'button' | 'modal' = 'button') {
   return { raw, events, awarded, replies, deleted, logs, gateway, audit, deps, refreshes: () => refreshes,
     advance: (ms: number) => { now += ms; },
     useMessage: (id: string, ephemeral = false) => {
-      raw.kind = 'button'; raw.message.id = id; raw.sourceEphemeral = ephemeral;
+      raw.kind = 'button'; raw.message.id = id; raw.message.flags = new MessageFlagsBitField(ephemeral ? MessageFlags.Ephemeral : 0);
       raw.deferred = false; raw.replied = false; raw.ephemeral = null; raw.responseId = id;
+    },
+    useCommand: (name: string) => {
+      raw.kind = 'command'; raw.commandName = name; raw.channelId = 'commands';
+      raw.deferred = false; raw.replied = false; raw.ephemeral = null;
     },
     setReady: (value: boolean) => { ready = value; },
     setPanel: (value: string) => { panelId = value; },
@@ -88,7 +96,7 @@ test('trusted button defers privately before fetching and awards only the clicki
   const f = fixture();
   f.gateway.getMember = async () => {
     assert.equal(f.raw.deferred, true);
-    return { hasRole: false, pending: false, bot: false };
+    return { hasAccess: false, pending: false, bot: false };
   };
   await f.run();
   assert.deepEqual(f.awarded, ['member']);
@@ -313,16 +321,17 @@ test('150 denied public-card clicks cannot fill the Discord audit queue or displ
 
 test('already verified, screening-pending, and bot members receive private replies without role writes', async () => {
   for (const [member, outcome] of [
-    [{ hasRole: true, pending: false, bot: false }, 'already_verified'],
-    [{ hasRole: false, pending: true, bot: false }, 'screening_pending'],
-    [{ hasRole: false, pending: false, bot: true }, 'bot'],
+    [{ hasAccess: true, pending: false, bot: false }, 'already_verified'],
+    [{ hasAccess: false, pending: true, bot: false }, 'screening_pending'],
+    [{ hasAccess: false, pending: false, bot: true }, 'bot'],
   ] as const) {
     const f = fixture();
     f.gateway.getMember = async () => member;
     await f.run();
     assert.deepEqual(f.awarded, []);
     assert.deepEqual(f.replies[0], { flags: MessageFlags.Ephemeral });
-    assert.equal(f.events[0]!.outcome, outcome);
+    assert.equal(f.logs.find(([, event]) => event === 'verification_attempt')?.[2]?.outcome, outcome);
+    assert.equal(f.events.length, outcome === 'already_verified' ? 0 : 1);
   }
 });
 
@@ -390,7 +399,7 @@ test('lost confirmation reply preserves the successful role-award log', async ()
 test('repeated button presses cannot award twice and cooldown logs stay local', async () => {
   const f = fixture();
   let reads = 0;
-  f.gateway.getMember = async () => { reads++; return { hasRole: false, pending: false, bot: false }; };
+  f.gateway.getMember = async () => { reads++; return { hasAccess: false, pending: false, bot: false }; };
   await f.run();
   await f.run();
   assert.deepEqual(f.awarded, ['member']);
@@ -424,7 +433,7 @@ test('concurrent button presses acknowledge processing locally and record one su
   const blocked = new Promise<void>(resolve => { release = resolve; });
   f.gateway.getMember = async () => {
     await blocked;
-    return { hasRole: false, pending: false, bot: false };
+    return { hasAccess: false, pending: false, bot: false };
   };
   const first = f.handle();
   try {
@@ -498,80 +507,96 @@ test('about sends its public V2 card and records command use', async () => {
   assert.match(messageText(payload), /loon.host/);
 });
 
+const BULLETIN_TEST_USER = '999999999999999999';
+const BULLETIN_JOIN_ID = bulletinActionId(BULLETIN_TEST_USER, true);
+const BULLETIN_LEAVE_ID = bulletinActionId(BULLETIN_TEST_USER, false);
+
 function bulletinFixture(member = { verified: true, subscribed: false, bot: false }) {
   const f = fixture();
+  f.raw.user.id = BULLETIN_TEST_USER;
   Object.assign(f.deps.config, { bulletinRoleId: 'bulletin-role' });
   const writes: [string, boolean][] = [];
   const gateway: BulletinGateway = {
     getMember: async () => member,
     assertRoleAssignable: async () => {},
-    setRole: async (id, subscribed) => { writes.push([id, subscribed]); },
+    setRole: async (id, subscribed) => { writes.push([id, subscribed]); member.subscribed = subscribed; },
   };
   const service = new BulletinService(gateway, f.deps.now);
   f.deps.bulletin = () => service;
   return { ...f, member, writes, bulletinGateway: gateway,
-    click: async (customId: string) => { f.useMessage('private-card'); f.raw.customId = customId; await f.run(); } };
+    click: async (customId: string) => {
+      f.useMessage('private-card', true); f.raw.channelId = 'commands'; f.raw.customId = customId; await f.run();
+    } };
 }
 
-test('verification offers optional Bulletin pings on the same private card and never assigns them', async () => {
-  for (const [hasRole, offered] of [[false, true], [true, true]] as const) {
+test('verification cards are independent of Bulletin, including for already verified members', async () => {
+  for (const hasAccess of [false, true]) {
     const f = bulletinFixture();
-    f.gateway.getMember = async () => ({ hasRole, pending: false, bot: false });
+    f.gateway.getMember = async () => ({ hasAccess, pending: false, bot: false });
     await f.run();
-    const card = JSON.stringify(f.replies[1]);
-    assert.equal(card.includes(BULLETIN_JOIN_ID), offered);
-    assert.match(messageText(f.replies[1]), /Get Bulletin pings|Want news pings/);
-    assert.match(messageText(f.replies[1]), /<@&bulletin-role>/);
+    assert.match(messageText(f.replies[1]), hasAccess ? /Already verified/ : /Member verified/);
+    assert.equal(JSON.stringify(f.replies).includes('dvc:bulletin'), false);
     assert.deepEqual(f.writes, []);
+    assert.deepEqual(f.awarded, hasAccess ? [] : [BULLETIN_TEST_USER]);
   }
 });
 
-test('no Bulletin offer without configuration, without a service, or for members who are not verified', async () => {
-  const unconfigured = fixture();
-  await unconfigured.run();
-  assert.equal(JSON.stringify(unconfigured.replies).includes('dvc:bulletin'), false);
-  const noService = bulletinFixture();
-  noService.deps.bulletin = () => undefined;
-  await noService.run();
-  assert.equal(JSON.stringify(noService.replies).includes('dvc:bulletin'), false);
-  for (const member of [{ hasRole: false, pending: true, bot: false }, { hasRole: false, pending: false, bot: true }]) {
-    const f = bulletinFixture();
-    f.gateway.getMember = async () => member;
-    await f.run();
-    assert.equal(JSON.stringify(f.replies).includes('dvc:bulletin'), false);
-  }
+test('/bulletin opens a private card from current role state and never changes a role on open', async () => {
+  const f = bulletinFixture();
+  f.useCommand('bulletin');
+  await f.run();
+  assert.deepEqual(f.replies[0], { flags: MessageFlags.Ephemeral });
+  assert.ok(JSON.stringify(f.replies.at(-1)).includes(BULLETIN_JOIN_ID));
+  // A staff role change outside this bot is reflected in the next card.
+  f.member.subscribed = true;
+  f.advance(5_001);
+  f.useCommand('bulletin');
+  await f.run();
+  assert.ok(JSON.stringify(f.replies.at(-1)).includes(BULLETIN_LEAVE_ID));
+  assert.deepEqual(f.writes, []);
+});
+
+test('a disabled /bulletin responds privately without deferring or touching roles', async () => {
+  const f = fixture('command');
+  f.raw.commandName = 'bulletin';
+  await f.run();
+  assert.equal(f.raw.deferred, false);
+  assert.equal(f.raw.ephemeral, true);
+  assert.match(messageText(f.replies[0]), /Bulletin pings are not enabled/);
 });
 
 test('Bulletin buttons toggle only the clicking member’s role and edit the private card in place', async () => {
   const f = bulletinFixture();
   await f.click(BULLETIN_JOIN_ID);
-  assert.deepEqual(f.writes, [['member', true]]);
+  assert.deepEqual(f.writes, [[BULLETIN_TEST_USER, true]]);
   assert.deepEqual(f.replies[0], { deferUpdate: true });
-  assert.match(messageText(f.replies[1]), /Bulletin pings on/);
+  assert.match(messageText(f.replies[1]), /Bulletin pings are on/);
   assert.ok(JSON.stringify(f.replies[1]).includes(BULLETIN_LEAVE_ID));
   assert.equal(f.events[0]!.event, 'bulletin_updated');
   assert.equal(f.events[0]!.outcome, 'subscribed');
   assert.equal(f.events[0]!.roleId, 'bulletin-role');
-  assert.equal(f.events[0]!.userId, 'member');
-  f.member.subscribed = true;
+  assert.equal(f.events[0]!.userId, BULLETIN_TEST_USER);
   f.advance(3_001);
   await f.click(BULLETIN_LEAVE_ID);
-  assert.deepEqual(f.writes, [['member', true], ['member', false]]);
-  assert.match(messageText(f.replies.at(-1)), /Bulletin pings off/);
+  assert.deepEqual(f.writes, [[BULLETIN_TEST_USER, true], [BULLETIN_TEST_USER, false]]);
+  assert.match(messageText(f.replies.at(-1)), /Bulletin pings are off/);
   assert.ok(JSON.stringify(f.replies.at(-1)).includes(BULLETIN_JOIN_ID));
   assert.equal(f.events[1]!.outcome, 'unsubscribed');
 });
 
-test('Bulletin presses from the wrong guild, channel, author, startup state, or a disabled feature never touch roles', async () => {
-  for (const change of ['guild', 'channel', 'author', 'not_ready', 'disabled']) {
+test('Bulletin denies legacy receipts, other members, public messages and invalid sources without role writes', async () => {
+  for (const change of ['guild', 'channel', 'author', 'not_ready', 'disabled', 'owner', 'public', 'legacy']) {
     const f = bulletinFixture();
-    f.useMessage('private-card');
+    f.useMessage('private-card', change !== 'public');
+    f.raw.channelId = 'commands';
     f.raw.customId = BULLETIN_JOIN_ID;
     if (change === 'guild') f.raw.guildId = 'elsewhere';
     if (change === 'channel') f.raw.channelId = 'elsewhere';
     if (change === 'author') f.raw.message.author.id = 'someone';
     if (change === 'not_ready') f.setReady(false);
     if (change === 'disabled') f.deps.bulletin = () => undefined;
+    if (change === 'owner') f.raw.user.id = '888888888888888888';
+    if (change === 'legacy') { f.raw.customId = 'dvc:bulletin:v1:join'; f.raw.channelId = 'verification'; }
     await f.run();
     assert.deepEqual(f.writes, [], change);
     assert.equal(f.raw.deferred, false, change);
@@ -590,7 +615,9 @@ test('unverified members cannot opt in, but any member can opt out; unchanged st
   assert.equal(unverified.events.length, 0);
   const lapsed = bulletinFixture({ verified: false, subscribed: true, bot: false });
   await lapsed.click(BULLETIN_LEAVE_ID);
-  assert.deepEqual(lapsed.writes, [['member', false]]);
+  assert.deepEqual(lapsed.writes, [[BULLETIN_TEST_USER, false]]);
+  assert.match(messageText(lapsed.replies.at(-1)), /Bulletin pings are off/);
+  assert.equal(JSON.stringify(lapsed.replies.at(-1)).includes(BULLETIN_JOIN_ID), false);
   const already = bulletinFixture({ verified: true, subscribed: true, bot: false });
   await already.click(BULLETIN_JOIN_ID);
   assert.deepEqual(already.writes, []);
@@ -598,13 +625,14 @@ test('unverified members cannot opt in, but any member can opt out; unchanged st
   assert.equal(already.events.length, 0);
 });
 
-test('rapid Bulletin presses stay local and keep the requested action available', async () => {
+test('rapid Bulletin presses stay private and leave the current preference card intact', async () => {
   const f = bulletinFixture();
   await f.click(BULLETIN_JOIN_ID);
   await f.click(BULLETIN_JOIN_ID);
-  assert.deepEqual(f.writes, [['member', true]]);
+  assert.deepEqual(f.writes, [[BULLETIN_TEST_USER, true]]);
   assert.match(messageText(f.replies.at(-1)), /Just a moment/);
-  assert.ok(JSON.stringify(f.replies.at(-1)).includes(BULLETIN_JOIN_ID));
+  assert.ok(JSON.stringify(f.replies[1]).includes(BULLETIN_LEAVE_ID));
+  assert.ok((f.replies.at(-1) as { flags: number }).flags & MessageFlags.Ephemeral);
   assert.equal(f.events.length, 1);
 });
 
@@ -632,8 +660,83 @@ test('a lost Bulletin confirmation reply preserves the role change and its log',
   const f = bulletinFixture();
   f.raw.editReply = async () => { throw new Error('Unknown interaction'); };
   await f.click(BULLETIN_JOIN_ID);
-  assert.deepEqual(f.writes, [['member', true]]);
+  assert.deepEqual(f.writes, [[BULLETIN_TEST_USER, true]]);
   assert.equal(f.events[0]!.event, 'bulletin_updated');
   assert.equal(f.logs.some(([, event]) => event === 'interaction_reply_failed'), true);
   assert.equal(f.events.some(event => event.event === 'bulletin_failed'), false);
+});
+
+const hallAnswer: HallReply = { reply: 'Verification gives you access to dvc.labs.',
+  webSearch: false, contextFresh: false, truncated: false, safety: undefined };
+
+test('/ask defers in the chosen reply mode and keeps the question, answer and continuations in that mode', async () => {
+  for (const privateReply of [false, true]) {
+    const f = fixture('command');
+    f.raw.commandName = 'ask'; f.raw.privateReply = privateReply; f.raw.resetContext = true;
+    f.raw.prompt = '  A private test question  ';
+    f.deps.hall = { ask: async (scope, prompt, reset) => {
+      assert.equal(f.raw.deferred, true);
+      assert.equal(f.raw.ephemeral, privateReply);
+      assert.deepEqual(scope, { guildId: 'guild', channelId: 'commands', userId: 'member', private: privateReply });
+      assert.equal(prompt, 'A private test question');
+      assert.equal(reset, true);
+      return { ...hallAnswer, reply: hallAnswer.reply.repeat(100) };
+    }, forget: async () => { assert.fail('Unexpected forget'); } };
+    await f.run();
+    assert.deepEqual(f.replies[0], privateReply ? { flags: MessageFlags.Ephemeral } : {});
+    assert.match(messageText(f.replies[1]), /Your question\*\*\nA private test question[\s\S]+Answer\*\*\nVerification/);
+    assert.ok(f.replies.length > 2);
+    for (const reply of f.replies.slice(2)) {
+      assert.equal((reply as { flags: number }).flags,
+        MessageFlags.IsComponentsV2 | (privateReply ? MessageFlags.Ephemeral : 0));
+    }
+    assert.equal(f.events.length, 0);
+    assert.ok(!JSON.stringify(f.logs).includes('A private test question'));
+    assert.ok(!JSON.stringify(f.logs).includes(hallAnswer.reply));
+  }
+});
+
+test('/ask validates its configuration, prompt, and server channel before contacting Hall', async () => {
+  for (const invalid of ['guild', 'channel', 'disabled', 'blank', 'length']) {
+    const f = fixture('command');
+    f.raw.commandName = 'ask';
+    if (invalid !== 'disabled') f.deps.hall = { ask: async () => { assert.fail('Unexpected Hall request'); }, forget: async () => {} };
+    if (invalid === 'guild') f.raw.guildId = 'another';
+    if (invalid === 'channel') f.raw.channelId = 'another';
+    if (invalid === 'blank') f.raw.prompt = '   ';
+    if (invalid === 'length') f.raw.prompt = 'x'.repeat(1_001);
+    await f.run();
+    assert.equal(f.raw.deferred, false, invalid);
+    assert.equal(f.raw.ephemeral, true, invalid);
+    assert.equal(f.replies.length, 1, invalid);
+  }
+});
+
+test('a failed public /ask leaves no question or upstream error in the channel or the logs', async () => {
+  const f = fixture('command');
+  f.raw.commandName = 'ask'; f.raw.prompt = 'private test question';
+  f.deps.hall = { ask: async () => { throw new HallError('access_denied', 403); }, forget: async () => {} };
+  await f.run();
+  assert.equal(f.deleted.length, 1);
+  assert.match(messageText(f.replies[1]), /Request finished/);
+  assert.equal((f.replies[2] as { flags: number }).flags, MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral);
+  assert.match(messageText(f.replies[2]), /Hall connection was refused/);
+  assert.ok(!JSON.stringify([f.replies, f.logs]).includes(f.raw.prompt));
+  assert.equal(f.events.length, 0);
+  assert.ok(f.logs.some(([, event, fields]) => event === 'hall_request_failed' && fields?.status === 403));
+});
+
+test('/forget clears only the selected conversation and always confirms privately', async () => {
+  for (const privateReply of [false, true]) {
+    const f = fixture('command');
+    f.raw.commandName = 'forget'; f.raw.privateReply = privateReply;
+    f.deps.hall = { ask: async () => { assert.fail('Unexpected generation'); }, forget: async scope => {
+      assert.equal(f.raw.ephemeral, true);
+      assert.deepEqual(scope, { guildId: 'guild', channelId: 'commands', userId: 'member', private: privateReply });
+    } };
+    await f.run();
+    assert.deepEqual(f.replies[0], { flags: MessageFlags.Ephemeral });
+    assert.match(messageText(f.replies[1]), new RegExp(`${privateReply ? 'private' : 'public'} conversation context`));
+    assert.deepEqual(f.deleted, []);
+  }
 });

@@ -81,6 +81,26 @@ test('BULLETIN_ROLE_ID is optional, exact, and cannot be @everyone or the verifi
   }
 });
 
+test('ADMIN_ROLE_ID is an optional existing role and cannot coincide with self-assignable roles', () => {
+  const id = '1562268805474820156';
+  assert.equal(loadConfig(environment()).adminRoleId, undefined);
+  assert.equal(loadConfig({ ...environment(), ADMIN_ROLE_ID: ` ${id} ` }).adminRoleId, id);
+  for (const value of ['invalid', id, environment().GUILD_ID!, environment().VERIFICATION_ROLE_ID!]) {
+    assert.throws(() => loadConfig({ ...environment(), BULLETIN_ROLE_ID: id, ADMIN_ROLE_ID: value }), /ADMIN_ROLE_ID/);
+  }
+});
+
+test('the optional Hall connection accepts an HTTPS origin and rejects credentials, paths, and redirects in its config', () => {
+  assert.equal(loadConfig(environment()).hallWorkerUrl, undefined);
+  const config = loadConfig({ ...environment(), WORKER_URL: ' https://hall.example/ ', HALLAI_API_KEY: ' secret ' });
+  assert.equal(config.hallWorkerUrl, 'https://hall.example');
+  assert.equal(config.hallApiKey, 'secret');
+  for (const value of ['http://hall.example', 'https://user:pass@hall.example', 'https://hall.example/api/chat',
+    'https://hall.example/?redirect=1', 'https://hall.example/#fragment']) {
+    assert.throws(() => loadConfig({ ...environment(), WORKER_URL: value }), /WORKER_URL/);
+  }
+});
+
 for (const name of ['PinMessages', 'BypassSlowmode'] as const) {
   test(`verification rejects ${name} without ManageMessages`, () => {
     const permissions = new PermissionsBitField([
