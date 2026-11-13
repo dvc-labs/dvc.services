@@ -12,8 +12,10 @@ export interface Config {
   readonly commandsChannelId: string;
   readonly logsChannelId: string;
   readonly verificationMessageId: string | undefined;
-  // Optional self-service news-ping role managed through /bulletin.
+  // Optional self-service news-ping role managed on the verification channel cards.
   readonly bulletinRoleId: string | undefined;
+  readonly modChannelId: string | undefined;
+  readonly minecraftChannelId: string | undefined;
   readonly hallWorkerUrl: string | undefined;
   readonly hallApiKey: string | undefined;
   readonly port: number;
@@ -71,6 +73,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     verificationMessageId: env.VERIFICATION_MESSAGE_ID?.trim()
       ? snowflake(env, 'VERIFICATION_MESSAGE_ID') : undefined,
     bulletinRoleId: env.BULLETIN_ROLE_ID?.trim() ? snowflake(env, 'BULLETIN_ROLE_ID') : undefined,
+    modChannelId: env.MOD_CHANNEL_ID?.trim() ? snowflake(env, 'MOD_CHANNEL_ID') : undefined,
+    minecraftChannelId: env.MINECRAFT_CHANNEL_ID?.trim() ? snowflake(env, 'MINECRAFT_CHANNEL_ID') : undefined,
     hallWorkerUrl: workerOrigin(env.WORKER_URL?.trim()),
     hallApiKey: env.HALLAI_API_KEY?.trim() || undefined,
     port,
@@ -89,6 +93,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   }
   if (new Set([config.verificationChannelId, config.commandsChannelId, config.logsChannelId]).size !== 3) {
     throw new SetupError('Use separate verification, commands, and private logs channels.');
+  }
+  if (!!config.modChannelId !== !!config.minecraftChannelId) {
+    throw new SetupError('Set both MOD_CHANNEL_ID and MINECRAFT_CHANNEL_ID for Cherry Creek, or leave both empty.');
+  }
+  if (config.modChannelId && new Set([config.verificationChannelId, config.commandsChannelId,
+    config.logsChannelId, config.modChannelId, config.minecraftChannelId]).size !== 5) {
+    throw new SetupError('MOD_CHANNEL_ID and MINECRAFT_CHANNEL_ID must be separate from each other and the other configured channels.');
   }
   return Object.freeze(config);
 }

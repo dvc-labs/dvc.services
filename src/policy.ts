@@ -6,6 +6,8 @@ export const VERIFY_CUSTOM_ID = 'dvc:verify:v1';
 export const MEMBER_CUSTOM_ID_PREFIX = 'dvc:member:v1:';
 export const VERIFICATION_AUDIT_REASON = 'dvc.services: member completed button verification';
 export const BULLETIN_CUSTOM_ID_PREFIX = 'dvc:bulletin:';
+export const BULLETIN_VERIFY_BUTTON = 'dvc:bulletin:v3:verify';
+export const BULLETIN_PANEL_BUTTON = 'dvc:bulletin:v3:panel';
 export const BULLETIN_JOIN_REASON = 'dvc.services: member opted in to Bulletin pings';
 export const BULLETIN_LEAVE_REASON = 'dvc.services: member opted out of Bulletin pings';
 // Role changes the bot already reports itself; their native audit entries stay in the console.
@@ -22,23 +24,24 @@ export function serverAccessRole(roles: { has(id: string): boolean }, config: Ac
   return undefined;
 }
 
-export function bulletinActionId(userId: string, subscribe: boolean): string {
-  return `${BULLETIN_CUSTOM_ID_PREFIX}v2:${userId}:${subscribe ? 'join' : 'leave'}`;
+export function bulletinActionId(userId: string, roleId: string, subscribe: boolean): string {
+  return `${BULLETIN_CUSTOM_ID_PREFIX}v3:${userId}:${roleId}:${subscribe ? 'join' : 'leave'}`;
 }
 
-export function parseBulletinAction(customId: string): { userId: string; subscribe: boolean } | null {
-  const match = /^dvc:bulletin:v2:(\d{17,20}):(join|leave)$/.exec(customId);
-  return match ? { userId: match[1]!, subscribe: match[2] === 'join' } : null;
+export function parseBulletinAction(customId: string): { userId: string; roleId: string; subscribe: boolean } | null {
+  const match = /^dvc:bulletin:v3:(\d{17,20}):(\d{17,20}):(join|leave)$/.exec(customId);
+  return match ? { userId: match[1]!, roleId: match[2]!, subscribe: match[3] === 'join' } : null;
 }
 
 // Supports both the old action row and the nested action row in a V2 container.
-export function hasVerificationButton(components: readonly unknown[]): boolean {
+export function hasEnabledButton(components: readonly unknown[], customId: string): boolean {
   return components.some(component => {
     if (!component || typeof component !== 'object') return false;
     if ('type' in component && component.type === ComponentType.Button
-      && 'custom_id' in component && component.custom_id === VERIFY_CUSTOM_ID) return true;
+      && 'custom_id' in component && component.custom_id === customId
+      && (!('disabled' in component) || component.disabled !== true)) return true;
     return 'components' in component && Array.isArray(component.components)
-      && hasVerificationButton(component.components);
+      && hasEnabledButton(component.components, customId);
   });
 }
 
@@ -57,7 +60,7 @@ interface ExpectedPanel {
   messageId: string | undefined;
 }
 
-function isTrustedVerificationPanel(
+export function isTrustedVerificationPanel(
   context: VerificationContext,
   expected: ExpectedPanel,
 ): boolean {
@@ -78,6 +81,7 @@ const elevatedPermissions = [
   PermissionFlagsBits.ManageChannels,
   PermissionFlagsBits.ManageWebhooks,
   PermissionFlagsBits.ViewAuditLog,
+  PermissionFlagsBits.ViewGuildInsights,
   PermissionFlagsBits.ManageNicknames,
   PermissionFlagsBits.ManageEvents,
   PermissionFlagsBits.ManageGuildExpressions,

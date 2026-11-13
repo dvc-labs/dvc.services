@@ -2,11 +2,11 @@ import { ChannelType, PermissionFlagsBits, type Client, type Guild,
   type Message, type TextChannel } from 'discord.js';
 import type { Config } from './config.js';
 import { SetupError } from './errors.js';
-import type { PanelMessage, PanelRepository } from './panel.js';
+import type { PanelKind, PanelMessage, PanelRepository } from './panel.js';
 import type { BulletinGateway } from './bulletin.js';
-import { assertSafeMemberRole, BULLETIN_JOIN_REASON, BULLETIN_LEAVE_REASON, hasVerificationButton,
-  serverAccessRole, VERIFICATION_AUDIT_REASON, type AccessRoles } from './policy.js';
-import { verificationPanel } from './ui.js';
+import { assertSafeMemberRole, BULLETIN_JOIN_REASON, BULLETIN_LEAVE_REASON, BULLETIN_PANEL_BUTTON, hasEnabledButton,
+  serverAccessRole, VERIFICATION_AUDIT_REASON, VERIFY_CUSTOM_ID, type AccessRoles } from './policy.js';
+import { bulletinPanel, verificationPanel } from './ui.js';
 import type { VerificationGateway } from './verification.js';
 
 // Shared by every role the bot hands out: it exists, is safe to self-assign, and sits below the bot.
@@ -71,14 +71,18 @@ export class DiscordBulletinGateway implements BulletinGateway {
 }
 
 function panelMessage(message: Message): PanelMessage {
+  const components = message.components.map(component => component.toJSON());
   return {
     id: message.id,
     authorId: message.author.id,
-    isVerificationPanel: hasVerificationButton(message.components.map(component => component.toJSON())),
+    kind: hasEnabledButton(components, VERIFY_CUSTOM_ID) ? 'verification'
+      : hasEnabledButton(components, BULLETIN_PANEL_BUTTON) ? 'bulletin' : undefined,
   };
 }
 
-export function discordPanelRepository(channel: TextChannel, config: Pick<Config, 'emoji'>): PanelRepository {
+export function discordPanelRepository(channel: TextChannel, config: Pick<Config, 'emoji' | 'bulletinRoleId'>): PanelRepository {
+  const payload = (kind: PanelKind) => kind === 'verification'
+    ? verificationPanel(config.emoji, !!config.bulletinRoleId) : bulletinPanel(config.emoji, config.bulletinRoleId!);
   return {
     async get(id) {
       try { return panelMessage(await channel.messages.fetch({ message: id, cache: false, force: true })); }
@@ -91,11 +95,11 @@ export function discordPanelRepository(channel: TextChannel, config: Pick<Config
       const messages = await channel.messages.fetch({ limit: 100, ...(before ? { before } : {}), cache: false });
       return [...messages.values()].map(panelMessage);
     },
-    async update(id) {
+    async update(id, kind) {
       // Discord requires clearing legacy fields when converting an existing panel to V2.
-      await channel.messages.edit(id, { ...verificationPanel(config.emoji), content: null, embeds: [] });
+      await channel.messages.edit(id, { ...payload(kind), content: null, embeds: [] });
     },
-    async create() { return (await channel.send(verificationPanel(config.emoji))).id; },
+    async create(kind) { return (await channel.send(payload(kind))).id; },
   };
 }
 
@@ -135,5 +139,16 @@ export async function preflight(client: Client<true>, config: Config) {
   const verificationChannel = await channel(config.verificationChannelId, 'VERIFICATION_CHANNEL_ID');
   await channel(config.commandsChannelId, 'COMMANDS_CHANNEL_ID');
   const logsChannel = await channel(config.logsChannelId, 'LOGS_CHANNEL_ID');
-  return { guild, gateway, bulletinGateway, verificationChannel, logsChannel };
+  let cherryChannels: { mod: TextChannel; minecraft: TextChannel } | undefined;
+  if (config.modChannelId && config.minecraftChannelId) {
+    const mod = await channel(config.modChannelId, 'MOD_CHANNEL_ID');
+    const minecraft = await channel(config.minecraftChannelId, 'MINECRAFT_CHANNEL_ID');
+    const memberRoles = [config.verificationRoleId, config.bulletinRoleId]
+      .flatMap(id => id ? guild.roles.cache.get(id) ?? [] : []);
+    if ([guild.roles.everyone, ...memberRoles].some(role => mod.permissionsFor(role).has(PermissionFlagsBits.ViewChannel))) {
+      throw new SetupError('Keep MOD_CHANNEL_ID private: do not grant View Channel to @everyone, the verification role, or the Bulletin role.');
+    }
+    cherryChannels = { mod, minecraft };
+  }
+  return { guild, gateway, bulletinGateway, verificationChannel, logsChannel, cherryChannels };
 }

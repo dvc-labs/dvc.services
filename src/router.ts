@@ -2,6 +2,7 @@ import { MessageFlags, PermissionFlagsBits, roleMention, userMention, type Butto
   type ChatInputCommandInteraction, type Interaction } from 'discord.js';
 import type { AuditLog } from './audit.js';
 import type { BulletinResult, BulletinService } from './bulletin.js';
+import { CHERRY_MODAL_ID, CHERRY_REVIEW_PREFIX, type CherryCreek } from './cherry-creek.js';
 import type { Config } from './config.js';
 import { SetupError } from './errors.js';
 import { HallError, MAX_HALL_PROMPT, type HallCommands, type HallScope } from './hall.js';
@@ -9,8 +10,9 @@ import { hallCards } from './hall-ui.js';
 import { errorSummary, type Logger } from './logger.js';
 import { MemberLookupLimiter, MemberReportCache, memberCard, memberView, parseMemberDetails,
   parseMemberNavigation, type MemberReport } from './member.js';
-import { BULLETIN_CUSTOM_ID_PREFIX, Cooldown, isTrustedVerificationButton, MEMBER_CUSTOM_ID_PREFIX, parseBulletinAction,
-  VERIFY_CUSTOM_ID } from './policy.js';
+import { BULLETIN_CUSTOM_ID_PREFIX, BULLETIN_PANEL_BUTTON, BULLETIN_VERIFY_BUTTON, Cooldown,
+  isTrustedVerificationButton, isTrustedVerificationPanel, MEMBER_CUSTOM_ID_PREFIX, parseBulletinAction, VERIFY_CUSTOM_ID } from './policy.js';
+import type { VerificationPanels } from './panel.js';
 import { aboutCard, brandedTitle, bulletinCard, card } from './ui.js';
 import type { VerificationResult, VerificationService } from './verification.js';
 
@@ -19,10 +21,12 @@ export interface RouterDependencies {
   botId: () => string;
   isReady: () => boolean;
   panelId: () => string | undefined;
-  refreshPanel: () => Promise<{ id: string; created: boolean }>;
+  bulletinPanelId?: () => string | undefined;
+  refreshPanel: () => Promise<VerificationPanels>;
   verification: () => VerificationService;
   // Absent or returning undefined when BULLETIN_ROLE_ID is not configured.
   bulletin?: () => BulletinService | undefined;
+  cherry?: () => CherryCreek | undefined;
   hall?: HallCommands;
   memberReport: (userId: string) => Promise<MemberReport | null>;
   audit: AuditLog;
@@ -39,28 +43,49 @@ const verificationReplies: Record<Exclude<VerificationResult, 'awarded'>, [strin
   cooldown: ['Just a moment', 'Please wait a few seconds before trying again.'],
 };
 
-type ButtonRoute = 'verify' | 'member_page' | 'member_details' | 'bulletin';
+type ButtonRoute = 'verify' | 'member_page' | 'member_details' | 'bulletin' | 'cherry_review';
 
 function buttonRoute(customId: string): ButtonRoute | undefined {
   if (customId === VERIFY_CUSTOM_ID) return 'verify';
   if (customId.startsWith(BULLETIN_CUSTOM_ID_PREFIX)) return 'bulletin';
+  if (customId.startsWith(CHERRY_REVIEW_PREFIX)) return 'cherry_review';
   if (parseMemberDetails(customId)) return 'member_details';
   return customId.startsWith(MEMBER_CUSTOM_ID_PREFIX) ? 'member_page' : undefined;
 }
 
 export class InteractionRouter {
   private readonly commandCooldown: Cooldown;
+  private readonly bulletinOpenCooldown: Cooldown;
   private readonly memberLookupLimiter: MemberLookupLimiter;
   private readonly memberReports: MemberReportCache;
   private readonly now: () => number;
   constructor(private readonly deps: RouterDependencies) {
     this.now = deps.now ?? Date.now;
     this.commandCooldown = new Cooldown(5_000, this.now);
+    this.bulletinOpenCooldown = new Cooldown(3_000, this.now);
     this.memberLookupLimiter = new MemberLookupLimiter(this.now);
     this.memberReports = new MemberReportCache(this.now);
   }
 
   async handle(interaction: Interaction): Promise<void> {
+    if (interaction.isModalSubmit()) {
+      if (interaction.customId !== CHERRY_MODAL_ID) return;
+      try {
+        const cherry = this.deps.cherry?.();
+        if (cherry && this.deps.isReady()) await cherry.submit(interaction);
+        else await interaction.reply({ ...card('Cherry Creek unavailable', 'Please try again when the bot is ready.'),
+          flags: MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral });
+      } catch (error) {
+        this.deps.logger.write('error', 'cherry_submit_interaction_failed', { error: errorSummary(error),
+          guildId: interaction.guildId ?? undefined, channelId: interaction.channelId ?? undefined, userId: interaction.user.id });
+        try {
+          const payload = card('Request could not be confirmed', 'Ask a moderator to check for your request before trying again.');
+          if (interaction.deferred) await interaction.editReply(payload);
+          else await interaction.reply({ ...payload, flags: MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral });
+        } catch (replyError) { this.deps.logger.write('warn', 'interaction_reply_failed', { error: errorSummary(replyError) }); }
+      }
+      return;
+    }
     if (!interaction.isChatInputCommand() && !interaction.isButton()) return;
     // Ignore unrelated components if more features are added later.
     const route = interaction.isButton() ? buttonRoute(interaction.customId) : undefined;
@@ -70,10 +95,18 @@ export class InteractionRouter {
       else if (route === 'member_details') await this.memberDetails(interaction);
       else if (route === 'member_page') await this.memberPage(interaction);
       else if (route === 'bulletin') await this.bulletin(interaction);
+      else if (route === 'cherry_review') {
+        const cherry = this.deps.cherry?.();
+        if (cherry && this.deps.isReady()) await cherry.review(interaction, this.deps.botId());
+        else await this.respond(interaction, 'Cherry Creek unavailable', 'Please try again when the bot is ready.');
+      }
       else await this.verify(interaction);
     } catch (error) {
       this.deps.logger.write('error', 'interaction_failed', {
         error: error instanceof SetupError ? error.message : errorSummary(error),
+        route: interaction.isChatInputCommand() ? interaction.commandName : route,
+        guildId: interaction.guildId ?? undefined, channelId: interaction.channelId, userId: interaction.user.id,
+        ...(interaction.isButton() ? { messageId: interaction.message.id } : {}),
       });
       await this.failure(interaction, 'Something went wrong',
         'Please try again shortly. If this continues, let the dvc.labs team know so they can check the bot.');
@@ -122,6 +155,8 @@ export class InteractionRouter {
 
   private async command(interaction: ChatInputCommandInteraction): Promise<void> {
     const { config, audit } = this.deps;
+    const started = this.now();
+    let command = interaction.commandName;
     let outcome = 'error';
     let detail: string | undefined;
     let targetUserId: string | undefined;
@@ -136,9 +171,11 @@ export class InteractionRouter {
         await this.respond(interaction, 'Starting up', 'The bot is getting ready. Please try again shortly.');
         return;
       }
-      if (interaction.channelId !== config.commandsChannelId) {
+      const cherryRoom = interaction.commandName === 'cherrycreek' && interaction.channelId === config.minecraftChannelId;
+      if (interaction.channelId !== config.commandsChannelId && !cherryRoom) {
         outcome = 'denied_channel';
-        await this.respond(interaction, 'Commands channel', `Please use this command in <#${config.commandsChannelId}>.`);
+        const target = interaction.commandName === 'cherrycreek' ? config.minecraftChannelId ?? config.commandsChannelId : config.commandsChannelId;
+        await this.respond(interaction, 'Commands channel', `Please use this command in <#${target}>.`);
         return;
       }
       if (interaction.commandName === 'verification'
@@ -184,27 +221,26 @@ export class InteractionRouter {
         } finally { permit.release(); }
       } else if (interaction.commandName === 'verification') {
         await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-        const panel = await this.deps.refreshPanel();
+        const panels = await this.deps.refreshPanel();
         audit.record({ event: 'verification_panel_updated', title: 'Verification panel ready',
-          outcome: panel.created ? 'created' : 'updated', userId: interaction.user.id,
-          channelId: config.verificationChannelId, detail: `Message ID: ${panel.id}` });
+          outcome: panels.verification.created ? 'created' : 'updated', userId: interaction.user.id,
+          channelId: config.verificationChannelId, detail: `Message ID: ${panels.verification.id}`,
+          ...(panels.bulletin ? { fields: [{ name: 'Bulletin panel', value: panels.bulletin.id }] } : {}) });
         outcome = 'success';
-        await this.respond(interaction, 'Verification panel ready',
-          `The panel has been ${panel.created ? 'created' : 'updated'} in <#${config.verificationChannelId}>.`);
-      } else if (interaction.commandName === 'bulletin') {
-        const service = this.deps.bulletin?.();
-        const roleId = config.bulletinRoleId;
-        if (!service || !roleId) {
+        await this.respond(interaction, 'Verification ready',
+          `The ${panels.bulletin ? 'verification and Bulletin cards are' : 'verification card is'} ready in <#${config.verificationChannelId}>.`);
+      } else if (interaction.commandName === 'cherrycreek') {
+        const cherry = this.deps.cherry?.();
+        if (!cherry) {
           outcome = 'not_configured';
-          await this.respond(interaction, 'Bulletin unavailable', 'Bulletin pings are not enabled on this server.');
+          await this.respond(interaction, 'Cherry Creek unavailable', 'Whitelist requests are not configured on this server.');
           return;
         }
-        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-        const status = await service.status(interaction.user.id);
-        await interaction.editReply(bulletinCard(status, interaction.user.id, roleId, config));
-        outcome = 'success';
-      } else if (interaction.commandName === 'ask' || interaction.commandName === 'forget') {
-        outcome = await this.hallCommand(interaction);
+        outcome = await cherry.open(interaction);
+      } else if (interaction.commandName === 'ask') {
+        const action = interaction.options.getSubcommand();
+        command = `ask ${action}`;
+        outcome = await this.hallCommand(interaction, action);
       } else {
         outcome = 'unknown_command';
         await this.respond(interaction, 'Command unavailable', 'Please refresh Discord’s command list and try again.');
@@ -215,8 +251,8 @@ export class InteractionRouter {
     } finally {
       if (interaction.guildId === config.guildId) {
         audit.record({ event: 'command_used', title: 'Command used', outcome,
-          userId: interaction.user.id, channelId: interaction.channelId, command: interaction.commandName,
-          discord: !['ask', 'forget', 'bulletin'].includes(interaction.commandName)
+          userId: interaction.user.id, channelId: interaction.channelId, command, durationMs: Math.max(0, this.now() - started),
+          discord: !['ask', 'cherrycreek'].includes(interaction.commandName)
             && outcome !== 'cooldown' && outcome !== 'rate_limited',
           priority: outcome === 'error' ? 'critical' : 'routine',
           ...(targetUserId ? { targetUserId } : {}),
@@ -225,13 +261,17 @@ export class InteractionRouter {
     }
   }
 
-  private async hallCommand(interaction: ChatInputCommandInteraction): Promise<string> {
+  private async hallCommand(interaction: ChatInputCommandInteraction, action: string): Promise<string> {
     const { hall, config, logger } = this.deps;
     if (!hall) {
       await this.respond(interaction, 'hallAI unavailable', 'The Hall connection is not configured on this server.');
       return 'not_configured';
     }
-    const asking = interaction.commandName === 'ask';
+    if (action !== 'question' && action !== 'forget') {
+      await this.respond(interaction, 'Command unavailable', 'Use /ask question or /ask forget.');
+      return 'unknown_command';
+    }
+    const asking = action === 'question';
     const prompt = asking ? interaction.options.getString('prompt', true).trim() : '';
     if (asking && (!prompt || prompt.length > MAX_HALL_PROMPT)) {
       await this.respond(interaction, 'Question needed', `Enter a question of up to ${MAX_HALL_PROMPT.toLocaleString('en')} characters.`);
@@ -420,18 +460,37 @@ export class InteractionRouter {
     const { config, audit } = this.deps;
     const service = this.deps.bulletin?.();
     const roleId = config.bulletinRoleId;
+    const onVerification = interaction.customId === BULLETIN_VERIFY_BUTTON;
+    const opening = onVerification || interaction.customId === BULLETIN_PANEL_BUTTON;
     const action = parseBulletinAction(interaction.customId);
-    // Old verification receipts and other people's cards cannot manage roles.
+    const trustedPanel = opening && isTrustedVerificationPanel({
+      guildId: interaction.guildId, channelId: interaction.channelId, authorId: interaction.message.author.id,
+      messageId: interaction.message.id, customId: interaction.customId,
+    }, { guildId: config.guildId, channelId: config.verificationChannelId, botId: this.deps.botId(),
+      messageId: onVerification ? this.deps.panelId() : this.deps.bulletinPanelId?.() });
+    const trustedAction = action?.userId === interaction.user.id && action.roleId === roleId
+      && interaction.message.flags.has(MessageFlags.Ephemeral);
     if (!service || !roleId || !this.deps.isReady() || interaction.guildId !== config.guildId
-      || interaction.channelId !== config.commandsChannelId || interaction.message.author.id !== this.deps.botId()
-      || !interaction.message.flags.has(MessageFlags.Ephemeral) || action?.userId !== interaction.user.id) {
+      || interaction.channelId !== config.verificationChannelId || interaction.message.author.id !== this.deps.botId()
+      || (!trustedPanel && !trustedAction)) {
       if (interaction.guildId === config.guildId) {
         audit.record({ event: 'bulletin_denied', title: 'Bulletin request not accepted',
           outcome: 'not_ready_or_invalid_message', userId: interaction.user.id, channelId: interaction.channelId, discord: false });
       }
-      await this.respond(interaction, 'Bulletin unavailable', `Use /bulletin in <#${config.commandsChannelId}> to open your own preferences.`);
+      await this.respond(interaction, 'Bulletin unavailable', `Open Bulletin preferences from a current card in <#${config.verificationChannelId}>.`);
       return;
     }
+    if (opening) {
+      if (!this.bulletinOpenCooldown.take(interaction.user.id)) {
+        await this.respond(interaction, 'Just a moment', 'Please wait a few seconds before opening Bulletin preferences again.');
+        return;
+      }
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+      const status = await service.status(interaction.user.id);
+      await interaction.editReply(bulletinCard(status, interaction.user.id, roleId, config));
+      return;
+    }
+    if (!action) return;
     // Edit the private card in place so the button always offers the next action.
     await interaction.deferUpdate();
     let result: BulletinResult;

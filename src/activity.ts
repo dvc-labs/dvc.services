@@ -133,6 +133,22 @@ export class GuildActivity {
       outcome: 'updated', userId: after.id, fields });
   }
 
+  guildUpdated(before: Guild, after: Guild): void {
+    if (!this.accepts(after.id)) return;
+    const fields: CardField[] = [];
+    const count = (value: number | null) => value === null ? 'Not reported' : String(value);
+    if (before.premiumSubscriptionCount !== after.premiumSubscriptionCount && after.premiumSubscriptionCount !== null) {
+      fields.push({ name: 'Boost count', value: count(before.premiumSubscriptionCount) + ' → ' + count(after.premiumSubscriptionCount) });
+    }
+    if (before.premiumTier !== after.premiumTier) {
+      fields.push({ name: 'Boost level', value: before.premiumTier + ' → ' + after.premiumTier });
+    }
+    if (fields.length) {
+      this.deps.audit.record({ event: 'guild_boost_updated', title: this.title('Server boosts changed'),
+        outcome: 'updated', fields });
+    }
+  }
+
   auditEntry(entry: GuildAuditLogsEntry, guild: Guild): void {
     if (!this.accepts(guild.id) || !this.auditIds.take(entry.id)) return;
     const action = humanise(AuditLogEvent[entry.action] ?? `Action ${entry.action}`);

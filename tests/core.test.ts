@@ -6,7 +6,7 @@ import { REQUIRED_GATEWAY_INTENTS, clientOptions, intentFailureHint } from '../s
 import { commands } from '../src/commands.js';
 import { loadConfig } from '../src/config.js';
 import { errorSummary } from '../src/logger.js';
-import { assertSafeMemberRole, Cooldown, hasVerificationButton, isTrustedVerificationButton, VERIFY_CUSTOM_ID } from '../src/policy.js';
+import { assertSafeMemberRole, Cooldown, hasEnabledButton, isTrustedVerificationButton, VERIFY_CUSTOM_ID } from '../src/policy.js';
 import { verificationPanel } from '../src/ui.js';
 import { BRAND_COLOR, VERSION } from '../src/version.js';
 
@@ -29,6 +29,20 @@ test('configuration preserves snowflakes as exact strings and applies defaults',
   assert.equal(config.logLevel, 'info');
   assert.equal(config.verificationMessageId, undefined);
   assert.ok(Object.isFrozen(config));
+});
+
+test('Cherry Creek accepts a separate pair of configured channels and rejects half-configured or overlapping destinations', () => {
+  const mod = '1562226019631366144';
+  const minecraft = '1569106176799408261';
+  assert.equal(loadConfig(environment()).modChannelId, undefined);
+  const config = loadConfig({ ...environment(), MOD_CHANNEL_ID: mod, MINECRAFT_CHANNEL_ID: minecraft });
+  assert.equal(config.modChannelId, mod);
+  assert.equal(config.minecraftChannelId, minecraft);
+  for (const extra of [{ MOD_CHANNEL_ID: mod }, { MINECRAFT_CHANNEL_ID: minecraft },
+    { MOD_CHANNEL_ID: minecraft, MINECRAFT_CHANNEL_ID: minecraft },
+    { MOD_CHANNEL_ID: environment().LOGS_CHANNEL_ID, MINECRAFT_CHANNEL_ID: minecraft }]) {
+    assert.throws(() => loadConfig({ ...environment(), ...extra }), /MOD_CHANNEL_ID/);
+  }
 });
 
 test('configuration rejects missing secrets, malformed IDs, invalid ports, and colliding channels', () => {
@@ -137,16 +151,17 @@ test('branding, persistent button ID, and package version remain consistent', ()
   assert.equal(panel.components[0]!.toJSON().accent_color, 0x26bcc5);
   assert.equal(panel.flags, MessageFlags.IsComponentsV2);
   assert.equal(BRAND_COLOR, 0x26bcc5);
-  assert.equal(hasVerificationButton(panel.components.map(component => component.toJSON())), true);
+  assert.equal(hasEnabledButton(panel.components.map(component => component.toJSON()), VERIFY_CUSTOM_ID), true);
   assert.equal(VERSION, JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version);
 });
 
 test('panel discovery recognises legacy rows and nested V2 buttons without matching other components', () => {
   const button = { type: 2, custom_id: VERIFY_CUSTOM_ID };
-  assert.equal(hasVerificationButton([{ type: 1, components: [button] }]), true);
-  assert.equal(hasVerificationButton([{ type: 17, components: [{ type: 1, components: [button] }] }]), true);
-  assert.equal(hasVerificationButton([{ type: 10, content: VERIFY_CUSTOM_ID }]), false);
-  assert.equal(hasVerificationButton([{ type: 2, custom_id: 'unrelated' }]), false);
+  assert.equal(hasEnabledButton([{ type: 1, components: [button] }], VERIFY_CUSTOM_ID), true);
+  assert.equal(hasEnabledButton([{ type: 17, components: [{ type: 1, components: [button] }] }], VERIFY_CUSTOM_ID), true);
+  assert.equal(hasEnabledButton([{ type: 10, content: VERIFY_CUSTOM_ID }], VERIFY_CUSTOM_ID), false);
+  assert.equal(hasEnabledButton([{ type: 2, custom_id: 'unrelated' }], VERIFY_CUSTOM_ID), false);
+  assert.equal(hasEnabledButton([{ ...button, disabled: true }], VERIFY_CUSTOM_ID), false);
 });
 
 test('only the five used intents are requested and message content is excluded', () => {

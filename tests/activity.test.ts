@@ -243,6 +243,25 @@ test('voice channel changes log native references and ignore microphone-only upd
   assert.equal(f.events[0]!.fields![0]!.value, '<#100000000000000001>');
 });
 
+test('guild updates log observed boost count and level changes without inventing a missing count', async () => {
+  const f = fixture();
+  const guild = (count: number | null, level: number, id = f.config.guildId) =>
+    ({ id, premiumSubscriptionCount: count, premiumTier: level } as unknown as Guild);
+  f.activity.guildUpdated(guild(2, 1), guild(3, 1));
+  f.activity.guildUpdated(guild(3, 1), guild(3, 1));
+  f.activity.guildUpdated(guild(3, 1), guild(null, 1));
+  f.activity.guildUpdated(guild(3, 1), guild(null, 2));
+  f.activity.guildUpdated(guild(null, 2), guild(0, 0));
+  f.activity.guildUpdated(guild(3, 1), guild(4, 2, 'unrelated'));
+  await f.flush();
+  assert.deepEqual(f.events.map(event => event.fields), [
+    [{ name: 'Boost count', value: '2 → 3' }],
+    [{ name: 'Boost level', value: '1 → 2' }],
+    [{ name: 'Boost count', value: 'Not reported → 0' }, { name: 'Boost level', value: '2 → 0' }],
+  ]);
+  assert.ok(f.events.every(event => event.event === 'guild_boost_updated' && event.actorId === undefined));
+});
+
 test('our own Bulletin role changes stay in the console, like verification awards', async () => {
   const f = fixture();
   const entry = { id: '100000000000000001', action: AuditLogEvent.MemberRoleUpdate, executorId: f.config.applicationId,
