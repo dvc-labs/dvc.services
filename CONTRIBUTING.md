@@ -45,8 +45,9 @@ For Discord-facing changes, manually test in the separate server:
 - A normal member verifies and receives only the intended role.
 - Verify acknowledges existing verification and configured admin roles without writing roles. Remove both roles and confirm the normal verification path works again.
 - Pending screening and invalid role hierarchy are handled safely.
-- With `BULLETIN_ROLE_ID` set: open `/bulletin` and change the role in Discord between opens to check the live status. Only the owner can use the private card. The buttons change only the Bulletin role, reject opt-ins without access, and allow existing subscribers to opt out after access is removed. Older verification cards should direct members to `/bulletin` without changing roles.
-- With Hall configured: test `/ask` with a public and private question, a long answer, reset and `/forget` in both modes. Verify that private continuations remain private and no transcript or integration secret is written to logs. Missing configuration and upstream errors should leave the rest of the bot available.
+- With `BULLETIN_ROLE_ID` set: confirm both verification channel cards survive restart without duplicates. Open preferences from each, change the role in Discord, and check the live status. Only the owner can use the private card. Verify opt-in, opt-out after access is removed, and rejection of replaced or legacy buttons. Clear the setting and restart to check that the second card is disabled, then restore it and check that the same card is re-enabled.
+- With Hall configured: test public and private `/ask question`, a long answer, reset and `/ask forget`. Verify private continuations and that no transcript or integration secret is logged. Missing configuration and upstream errors should leave the rest of the bot available.
+- With Cherry Creek configured: submit a Java name, check private moderation delivery, and try submitting again after the cooldown and a restart. The open request must block both attempts, even with a different username. Decline a request then check a separate acceptance. Confirm only the approved member is pinged and a reviewed request cannot notify twice.
 - `/about` works in the configured commands channel.
 - `/member user:@someone` works publicly for ordinary members without publishing sensitive pages. Staff details are ephemeral and require Manage Server or Moderate Members. Revoke that permission and confirm further private pages are denied. Verify snapshot expiry, no repeated member/profile fetches on page changes, shared API limits, and voice-channel redaction.
 - Hostile nicknames/statuses cannot create links, subtext, formatting, quotes, or mentions. Check bidi removal and code-point truncation. Denied clicks, join/DM bursts, and success floods cannot displace failure/lifecycle records.
@@ -55,7 +56,7 @@ For Discord-facing changes, manually test in the separate server:
 - Native Discord audit entries identify the actual actor and render role/member/channel references without notifications.
 - `/verification` requires Manage Server permission and reuses the panel.
 - Restarting keeps a usable panel without adding another.
-- Discord and console logs show correct outcomes without secrets or message content.
+- Discord and console logs show command timing, Cherry Creek decisions and delivery, and observed boost count and level changes without secrets, usernames from whitelist forms, or ordinary message content.
 
 Describe what you checked in the pull request, including anything you could not run. CI also builds the image and checks the non-root production runtime. No production secrets should be added to GitHub Actions.
 

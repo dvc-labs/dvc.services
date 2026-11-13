@@ -3,9 +3,11 @@ import test from 'node:test';
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType, Collection, MessageFlags,
   PermissionFlagsBits, PermissionsBitField, type Client, type TextChannel } from 'discord.js';
 import { DiscordBulletinGateway, DiscordVerificationGateway, discordPanelRepository, preflight } from '../src/discord.js';
-import { ensureVerificationPanel } from '../src/panel.js';
-import { BULLETIN_JOIN_REASON, BULLETIN_LEAVE_REASON, VERIFY_CUSTOM_ID } from '../src/policy.js';
-import { testConfig } from './helpers.js';
+import { ensureVerificationPanels } from '../src/panel.js';
+import { BULLETIN_JOIN_REASON, BULLETIN_LEAVE_REASON, BULLETIN_PANEL_BUTTON, BULLETIN_VERIFY_BUTTON,
+  hasEnabledButton, VERIFY_CUSTOM_ID } from '../src/policy.js';
+import { bulletinPanel, verificationPanel } from '../src/ui.js';
+import { messageText, testConfig, TEST_MINECRAFT_CHANNEL_ID, TEST_MOD_CHANNEL_ID } from './helpers.js';
 import { VerificationService } from '../src/verification.js';
 
 function preflightFixture() {
@@ -14,20 +16,27 @@ function preflightFixture() {
   const hierarchy = new Map<string, number>();
   const me = { permissions: new PermissionsBitField([PermissionFlagsBits.ManageRoles, PermissionFlagsBits.ViewAuditLog]),
     roles: { highest: { comparePositionTo: (role: { id: string }) => hierarchy.get(role.id) ?? 1 } } };
-  const channels = new Map([config.verificationChannelId, config.commandsChannelId, config.logsChannelId].map(id => [id, {
+  const publicRole = { id: config.guildId, permissions: new PermissionsBitField() };
+  const memberView = new Map<string, Set<string>>();
+  const channels = new Map([config.verificationChannelId, config.commandsChannelId, config.logsChannelId,
+    TEST_MOD_CHANNEL_ID, TEST_MINECRAFT_CHANNEL_ID].map(id => [id, {
     id, type: ChannelType.GuildText, permissions: new PermissionsBitField([
       PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.EmbedLinks, PermissionFlagsBits.ReadMessageHistory,
-    ]), permissionsFor() { return this.permissions; },
+    ]), permissionsFor(subject: unknown) {
+      if (subject === me) return this.permissions;
+      const role = subject as { id: string };
+      return new PermissionsBitField(memberView.get(id)?.has(role.id) ? PermissionFlagsBits.ViewChannel : 0n);
+    },
   }]));
   const roles = new Map<string, { id: string; managed: boolean; permissions: PermissionsBitField }>([[config.verificationRoleId,
     { id: config.verificationRoleId, managed: false, permissions: new PermissionsBitField(PermissionFlagsBits.ViewChannel) }]]);
   const guild = { id: config.guildId,
     members: { fetchMe: async () => me },
-    roles: { fetch: async (id: string) => roles.get(id) },
+    roles: { fetch: async (id: string) => roles.get(id), cache: roles, everyone: publicRole },
     channels: { fetch: async (id: string) => channels.get(id) },
   };
   const client = { application: { id: config.applicationId }, guilds: { fetch: async () => guild } };
-  return { config, me, channels, roles, hierarchy, client: client as unknown as Client<true> };
+  return { config, me, channels, roles, hierarchy, memberView, client: client as unknown as Client<true> };
 }
 
 test('startup accepts the documented permissions and requires View Audit Log without Administrator', async () => {
@@ -47,6 +56,21 @@ test('startup checks Read Message History in verification, command, and log chan
   }
 });
 
+test('Cherry Creek startup requires bot access to both channels and denies public staff requests', async () => {
+  const f = preflightFixture();
+  const modChannelId = TEST_MOD_CHANNEL_ID;
+  const minecraftChannelId = TEST_MINECRAFT_CHANNEL_ID;
+  Object.assign(f.config, { modChannelId, minecraftChannelId });
+  assert.equal((await preflight(f.client, f.config)).cherryChannels?.mod.id, modChannelId);
+  for (const role of [f.config.guildId, f.config.verificationRoleId]) {
+    f.memberView.set(modChannelId, new Set([role]));
+    await assert.rejects(preflight(f.client, f.config), /Keep MOD_CHANNEL_ID private/);
+  }
+  f.memberView.clear();
+  f.channels.get(minecraftChannelId)!.permissions.remove(PermissionFlagsBits.SendMessages);
+  await assert.rejects(preflight(f.client, f.config), /Send Messages.*MINECRAFT_CHANNEL_ID/);
+});
+
 test('the existing legacy panel upgrades in place and the real adapter finds its nested V2 button on restart', async () => {
   const config = testConfig();
   const message = { id: '777777777777777777', author: { id: config.applicationId },
@@ -56,17 +80,20 @@ test('the existing legacy panel upgrades in place and the real adapter finds its
   let creates = 0;
   const channel = {
     messages: {
-      fetch: async (options: { message?: string }) => options.message ? message : new Collection([[message.id, message]]),
+      fetch: async (options: { message?: string; before?: string }) => options.message ? message
+        : new Collection(options.before ? [] : [[message.id, message]]),
       edit: async (id: string, payload: typeof edits[number]) => { edits.push({ ...payload, id }); message.components = payload.components; },
     },
     send: async () => { creates++; return { id: 'another-panel' }; },
   };
   const repository = discordPanelRepository(channel as unknown as TextChannel, config);
-  assert.deepEqual(await ensureVerificationPanel(repository, config.applicationId, message.id), { id: message.id, created: false });
+  assert.deepEqual(await ensureVerificationPanels(repository, config.applicationId, false, message.id),
+    { verification: { id: message.id, created: false } });
   assert.equal(edits[0]!.content, null);
   assert.deepEqual(edits[0]!.embeds, []);
   assert.equal(edits[0]!.flags, MessageFlags.IsComponentsV2);
-  assert.deepEqual(await ensureVerificationPanel(repository, config.applicationId), { id: message.id, created: false });
+  assert.deepEqual(await ensureVerificationPanels(repository, config.applicationId, false),
+    { verification: { id: message.id, created: false } });
   assert.equal(creates, 0);
   assert.equal(edits.length, 2);
 });
@@ -96,6 +123,44 @@ test('startup validates the optional Bulletin role: it exists, is safe to self-a
   above.roles.set(bulletinRoleId, bulletinRole);
   above.hierarchy.set(bulletinRoleId, 0);
   await assert.rejects(preflight(above.client, above.config), /above the Bulletin role/);
+});
+
+test('startup names View Server Insights and the affected role without banning it from the bot', async () => {
+  const f = preflightFixture();
+  f.me.permissions.add(PermissionFlagsBits.ViewGuildInsights);
+  await preflight(f.client, f.config);
+  const memberRole = f.roles.get(f.config.verificationRoleId)!;
+  memberRole.permissions.add(PermissionFlagsBits.ViewGuildInsights);
+  await assert.rejects(preflight(f.client, f.config), /Remove View Server Insights from the verification role/);
+  memberRole.permissions.remove(PermissionFlagsBits.ViewGuildInsights);
+  const bulletinRoleId = '999999999999999999';
+  f.roles.set(bulletinRoleId, { ...memberRole, id: bulletinRoleId,
+    permissions: new PermissionsBitField(PermissionFlagsBits.ViewGuildInsights) });
+  Object.assign(f.config, { bulletinRoleId });
+  await assert.rejects(preflight(f.client, f.config), /Remove View Server Insights from the Bulletin role/);
+});
+
+test('disabling Bulletin updates existing cards in place and re-enabling restores the same card', async () => {
+  const config = testConfig();
+  const roleId = '999999999999999999';
+  const verification = { id: '777777777777777777', author: { id: config.applicationId },
+    components: verificationPanel(config.emoji, true).components };
+  const bulletin = { id: '888888888888888888', author: { id: config.applicationId },
+    components: bulletinPanel(config.emoji, roleId).components };
+  const messages = new Collection([[bulletin.id, bulletin], [verification.id, verification]]);
+  const channel = { messages: {
+    fetch: async () => messages,
+    edit: async (id: string, payload: ReturnType<typeof bulletinPanel>) => { messages.get(id)!.components = payload.components; },
+  }, send: async () => { assert.fail('Expected both existing messages to be reused'); } };
+  const ensure = (enabled: boolean) => ensureVerificationPanels(discordPanelRepository(channel as unknown as TextChannel,
+    { ...config, bulletinRoleId: enabled ? roleId : undefined }), config.applicationId, enabled);
+  assert.deepEqual(await ensure(false), { verification: { id: verification.id, created: false } });
+  assert.ok(hasEnabledButton(verification.components.map(c => c.toJSON()), VERIFY_CUSTOM_ID));
+  assert.ok(!JSON.stringify(verification).includes(BULLETIN_VERIFY_BUTTON));
+  assert.match(messageText(bulletin), /Bulletin preferences are currently disabled/);
+  assert.ok(!hasEnabledButton(bulletin.components.map(c => c.toJSON()), BULLETIN_PANEL_BUTTON));
+  assert.deepEqual((await ensure(true)).bulletin, { id: bulletin.id, created: false });
+  assert.ok(hasEnabledButton(bulletin.components.map(c => c.toJSON()), BULLETIN_PANEL_BUTTON));
 });
 
 test('the configured admin role must exist but may carry staff permissions and sit above the bot', async () => {

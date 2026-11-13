@@ -5,11 +5,12 @@ import {
 } from 'discord.js';
 import type { BulletinStatus } from './bulletin.js';
 import type { Config } from './config.js';
-import { bulletinActionId, VERIFY_CUSTOM_ID } from './policy.js';
+import { bulletinActionId, BULLETIN_PANEL_BUTTON, BULLETIN_VERIFY_BUTTON, VERIFY_CUSTOM_ID } from './policy.js';
 import { BRAND_COLOR, DVC_EMOJI, GITHUB_URL, REPOSITORY_URL, VERSION, WEBSITE_URL } from './version.js';
 
 export interface CardField { name: string; value: string }
 interface CardOptions {
+  accentColor?: number;
   thumbnail?: string;
   buttons?: ButtonBuilder[];
   footer?: string;
@@ -53,7 +54,7 @@ export function discordTime(timestamp: number | null | undefined): string {
 // Leave room below Discord's 4,000-character combined text limit.
 export function card(title: string, description = '', fields: readonly CardField[] = [], options: CardOptions = {}) {
   const heading = ('## ' + title + '\n' + description).trim().slice(0, 1_000);
-  const container = new ContainerBuilder().setAccentColor(BRAND_COLOR);
+  const container = new ContainerBuilder().setAccentColor(options.accentColor ?? BRAND_COLOR);
   const header = new TextDisplayBuilder().setContent(heading);
   if (options.thumbnail) {
     container.addSectionComponents(new SectionBuilder().addTextDisplayComponents(header)
@@ -85,29 +86,42 @@ function githubButton(): ButtonBuilder {
   return new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel('Follow dvc.labs on GitHub').setURL(GITHUB_URL);
 }
 
-export function verificationPanel(emoji = DVC_EMOJI) {
+function bulletinOpenButton(customId: string) {
+  return new ButtonBuilder().setCustomId(customId).setLabel('Bulletin preferences').setStyle(ButtonStyle.Secondary);
+}
+
+export function verificationPanel(emoji = DVC_EMOJI, bulletinEnabled = false) {
   const verify = new ButtonBuilder().setCustomId(VERIFY_CUSTOM_ID).setLabel('Verify').setStyle(ButtonStyle.Primary);
   const match = /^<(a?):([a-zA-Z0-9_]+):(\d+)>$/.exec(emoji);
   if (match) verify.setEmoji({ id: match[3]!, name: match[2]!, animated: match[1] === 'a' });
   return card(brandedTitle('Welcome to dvc.labs', emoji),
     'Read the server rules and complete any Discord screening, then press **Verify** to unlock dvc.labs.\n\n'
-    + 'Already have access? You’re all set.', [], {
-      buttons: [verify, githubButton()],
+    + 'Already have access? You’re all set.'
+    + (bulletinEnabled ? ' You can opt into optional news pings with **Bulletin preferences**.' : ''), [], {
+      buttons: [verify, ...(bulletinEnabled ? [bulletinOpenButton(BULLETIN_VERIFY_BUTTON)] : []), githubButton()],
     });
 }
 
-function bulletinButton(userId: string, subscribe: boolean): ButtonBuilder {
-  return new ButtonBuilder().setCustomId(bulletinActionId(userId, subscribe))
+export function bulletinPanel(emoji: string, roleId?: string) {
+  const description = roleId
+    ? `Want to hear about new projects and server updates? Choose whether to receive ${roleMention(roleId)} pings. You can change your choice here any time.`
+    : 'Bulletin preferences are currently disabled.';
+  return card(brandedTitle('dvc.labs Bulletin', emoji), description, [],
+    { buttons: [bulletinOpenButton(BULLETIN_PANEL_BUTTON).setDisabled(!roleId)] });
+}
+
+function bulletinButton(userId: string, roleId: string, subscribe: boolean): ButtonBuilder {
+  return new ButtonBuilder().setCustomId(bulletinActionId(userId, roleId, subscribe))
     .setLabel(subscribe ? 'Get Bulletin pings' : 'Stop Bulletin pings').setStyle(ButtonStyle.Secondary);
 }
 
-// /bulletin opens this private preference card using current role membership.
+// Both public cards open the same private preference card with current role membership.
 export function bulletinCard(status: BulletinStatus, userId: string, roleId: string,
   config: Pick<Config, 'emoji' | 'verificationChannelId'>, notice = '') {
   const role = roleMention(roleId);
   const reply = (title: string, description: string, subscribe: boolean | null) =>
     card(brandedTitle(title, config.emoji), notice ? `${notice}\n\n${description}` : description, [],
-      subscribe === null ? {} : { buttons: [bulletinButton(userId, subscribe)] });
+      subscribe === null ? {} : { buttons: [bulletinButton(userId, roleId, subscribe)] });
   switch (status) {
     case 'on':
       return reply('Bulletin pings are on', `You have ${role} for dvc.labs news. Press the button to stop receiving pings.`, false);
@@ -124,8 +138,7 @@ export function aboutCard(config: Config, uptimeSeconds: number) {
   const hours = Math.floor(uptimeSeconds / 3_600);
   const minutes = Math.floor((uptimeSeconds % 3_600) / 60);
   const commands = ['/about', '/member'];
-  if (config.bulletinRoleId) commands.push('/bulletin');
-  if (config.hallWorkerUrl && config.hallApiKey) commands.push('/ask', '/forget');
+  if (config.hallWorkerUrl && config.hallApiKey) commands.push('/ask');
   return card(brandedTitle('dvc.services', config.emoji),
     'The service bot for **dvc.labs** — the home for dvc. projects, experiments, and server updates.\n\n'
     + 'Member verification, a friendly welcome, member lookups, and useful server activity logs.', [
@@ -133,6 +146,8 @@ export function aboutCard(config: Config, uptimeSeconds: number) {
       { name: 'Online for', value: hours + 'h ' + minutes + 'm' },
       { name: 'Hosted by', value: '[loon.host](https://loon.host)' },
       { name: 'Commands', value: `Use ${commands.join(', ')} in ${channelMention(config.commandsChannelId)}. Staff can also use /verification.` },
+      ...(config.bulletinRoleId ? [{ name: 'Bulletin', value: `Manage news pings in ${channelMention(config.verificationChannelId)}.` }] : []),
+      ...(config.minecraftChannelId ? [{ name: 'Cherry Creek', value: `Use /cherrycreek in ${channelMention(config.minecraftChannelId)} to request access.` }] : []),
       { name: 'Links', value: '[dvc.](' + WEBSITE_URL + ') · [Source code](' + REPOSITORY_URL + ')' },
     ], { buttons: [githubButton()] });
 }

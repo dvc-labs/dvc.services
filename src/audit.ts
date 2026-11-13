@@ -9,6 +9,7 @@ export interface AuditEvent {
   userId?: string;
   channelId?: string;
   command?: string;
+  durationMs?: number;
   roleId?: string;
   actorId?: string;
   targetUserId?: string;
@@ -29,6 +30,7 @@ export function discordAuditSink(channel: TextChannel): AuditSink {
     if (event.userId) fields.push({ name: 'Member', value: userMention(event.userId) });
     if (event.channelId) fields.push({ name: 'Channel', value: channelMention(event.channelId) });
     if (event.command) fields.push({ name: 'Command', value: `/${event.command}` });
+    if (event.durationMs !== undefined) fields.push({ name: 'Handled in', value: `${event.durationMs} ms` });
     if (event.roleId) fields.push({ name: 'Role', value: roleMention(event.roleId) });
     if (event.actorId) fields.push({ name: 'Performed by', value: userMention(event.actorId) });
     if (event.targetUserId) fields.push({ name: 'Target member', value: userMention(event.targetUserId) });
@@ -50,7 +52,7 @@ export class AuditLog {
   record(event: AuditEvent): void {
     this.logger.write('info', event.event, {
       outcome: event.outcome, userId: event.userId, channelId: event.channelId,
-      command: event.command, roleId: event.roleId, detail: event.detail,
+      command: event.command, durationMs: event.durationMs, roleId: event.roleId, detail: event.detail,
       actorId: event.actorId, targetUserId: event.targetUserId,
       context: event.fields?.map(field => `${field.name}: ${field.value}`).join(' | '),
     });

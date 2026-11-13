@@ -2,6 +2,7 @@ import { ActivityType, Client, Events } from 'discord.js';
 import { GuildActivity } from './activity.js';
 import { AuditLog, discordAuditSink } from './audit.js';
 import { BulletinService } from './bulletin.js';
+import { CherryCreek } from './cherry-creek.js';
 import { syncCommands } from './commands.js';
 import { clientOptions, intentFailureHint } from './client-options.js';
 import { loadConfig, type Config } from './config.js';
@@ -11,7 +12,7 @@ import { HallClient } from './hall.js';
 import { createHealthServer } from './health.js';
 import { errorSummary, Logger } from './logger.js';
 import { loadMemberReport } from './member.js';
-import { ensureVerificationPanel } from './panel.js';
+import { ensureVerificationPanels, type VerificationPanels } from './panel.js';
 import { InteractionRouter } from './router.js';
 import { VerificationService } from './verification.js';
 import { VERSION } from './version.js';
@@ -27,7 +28,7 @@ catch (error) {
 const logger = new Logger(config.logLevel, config.token);
 const hall = config.hallWorkerUrl && config.hallApiKey ? new HallClient(config.hallWorkerUrl, config.hallApiKey) : undefined;
 if (!hall && (config.hallWorkerUrl || config.hallApiKey)) {
-  logger.write('warn', 'hall_setup_incomplete', { detail: `Set ${config.hallWorkerUrl ? 'HALLAI_API_KEY' : 'WORKER_URL'} to enable /ask and /forget.` });
+  logger.write('warn', 'hall_setup_incomplete', { detail: `Set ${config.hallWorkerUrl ? 'HALLAI_API_KEY' : 'WORKER_URL'} to enable /ask.` });
 }
 const audit = new AuditLog(logger);
 const client = new Client({
@@ -38,9 +39,11 @@ const client = new Client({
 let operational = false;
 let stopping = false;
 let currentPanelId: string | undefined;
+let currentBulletinPanelId: string | undefined;
 let verification: VerificationService | undefined;
 let bulletin: BulletinService | undefined;
-let refreshPanel: (() => Promise<{ id: string; created: boolean }>) | undefined;
+let cherry: CherryCreek | undefined;
+let refreshPanel: (() => Promise<VerificationPanels>) | undefined;
 const activity = new GuildActivity({ config, audit, isReady: () => operational && !stopping });
 const health = createHealthServer(() => operational && !stopping && client.isReady());
 
@@ -71,23 +74,34 @@ async function initialise(readyClient: Client<true>): Promise<void> {
 
   verification = new VerificationService(resources.gateway);
   if (resources.bulletinGateway) bulletin = new BulletinService(resources.bulletinGateway);
+  if (resources.cherryChannels) cherry = new CherryCreek(config, resources.cherryChannels.mod, resources.cherryChannels.minecraft, audit);
   const repository = discordPanelRepository(resources.verificationChannel, config);
-  let panelTask: Promise<{ id: string; created: boolean }> | undefined;
+  let panelTask: Promise<VerificationPanels> | undefined;
   refreshPanel = () => {
-    panelTask ??= ensureVerificationPanel(repository, readyClient.user.id, config.verificationMessageId)
-      .then(panel => { currentPanelId = panel.id; return panel; })
+    panelTask ??= ensureVerificationPanels(repository, readyClient.user.id, !!bulletin, config.verificationMessageId)
+      .then(panels => {
+        currentPanelId = panels.verification.id;
+        currentBulletinPanelId = panels.bulletin?.id;
+        return panels;
+      })
       .finally(() => { panelTask = undefined; });
     return panelTask;
   };
-  const panel = await refreshPanel();
+  const panels = await refreshPanel();
   audit.record({ event: 'verification_panel_ready', title: 'Verification panel ready',
-    outcome: panel.created ? 'created' : 'reused', channelId: config.verificationChannelId,
-    detail: `Message ID: ${panel.id}` });
+    outcome: panels.verification.created ? 'created' : 'reused', channelId: config.verificationChannelId,
+    detail: `Message ID: ${panels.verification.id}`,
+    ...(panels.bulletin ? { fields: [{ name: 'Bulletin panel', value: panels.bulletin.id }] } : {}) });
   if (stopping) return;
   operational = true;
   audit.record({ event: 'bot_online', title: 'dvc.services online', outcome: 'ready', priority: 'critical',
     detail: `v${VERSION} is ready in dvc.labs. Verification, member lookups, welcome DMs, and server activity logs are available.`
-      + (bulletin ? ' /bulletin is enabled.' : '') + (hall ? ' /ask and /forget are configured.' : '') });
+      + (bulletin ? ' Bulletin preferences are enabled.' : '') + (hall ? ' /ask is configured.' : '')
+      + (cherry ? ' Cherry Creek whitelist requests are enabled.' : ''),
+    fields: [{ name: 'Guild members', value: String(resources.guild.memberCount) },
+      { name: 'Server boosts', value: resources.guild.premiumSubscriptionCount === null ? 'Not reported'
+        : String(resources.guild.premiumSubscriptionCount) },
+      { name: 'Boost level', value: String(resources.guild.premiumTier) }] });
 }
 
 const router = new InteractionRouter({
@@ -96,6 +110,7 @@ const router = new InteractionRouter({
   botId: () => client.user?.id ?? '',
   isReady: () => operational && !stopping && client.isReady(),
   panelId: () => currentPanelId,
+  bulletinPanelId: () => currentBulletinPanelId,
   memberReport: async userId => {
     const guild = client.guilds.cache.get(config.guildId);
     if (!guild) throw new SetupError('The configured server is not available.');
@@ -106,6 +121,7 @@ const router = new InteractionRouter({
     return verification;
   },
   bulletin: () => bulletin,
+  cherry: () => cherry,
   refreshPanel: async () => {
     if (!refreshPanel) throw new SetupError('Verification panel has not initialised.');
     return refreshPanel();
@@ -120,6 +136,7 @@ function observe(event: string, task: () => void): void {
 client.on(Events.GuildMemberAdd, member => observe('member_join_log_failed', () => activity.joined(member)));
 client.on(Events.GuildMemberRemove, member => observe('member_leave_log_failed', () => activity.left(member)));
 client.on(Events.GuildMemberUpdate, (before, after) => observe('member_update_log_failed', () => activity.updated(before, after)));
+client.on(Events.GuildUpdate, (before, after) => observe('guild_update_log_failed', () => activity.guildUpdated(before, after)));
 client.on(Events.GuildAuditLogEntryCreate, (entry, guild) => observe('server_audit_log_failed', () => activity.auditEntry(entry, guild)));
 client.on(Events.VoiceStateUpdate, (before, after) => observe('voice_log_failed', () => activity.voiceChanged(before, after)));
 client.once(Events.ClientReady, readyClient => {
