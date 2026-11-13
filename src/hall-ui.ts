@@ -1,8 +1,19 @@
+import { ButtonBuilder, ButtonStyle } from 'discord.js';
 import { MAX_HALL_PROMPT, type HallReply } from './hall.js';
 import { brandedTitle, card, displayText } from './ui.js';
 
 const PAGE_SIZE = 2_400;
 const MAX_PAGES = 10;
+export const HALL_FORGET_PREFIX = 'dvc:hall:v1:forget:';
+
+export function hallForgetId(ownerId: string, privateReply: boolean): string {
+  return HALL_FORGET_PREFIX + ownerId + ':' + (privateReply ? 'private' : 'public');
+}
+
+export function parseHallForget(customId: string): { ownerId: string; private: boolean } | undefined {
+  const match = /^dvc:hall:v1:forget:(\d{17,20}):(public|private)$/.exec(customId);
+  return match ? { ownerId: match[1]!, private: match[2] === 'private' } : undefined;
+}
 
 // Scan complete Markdown destinations (including balanced URL parentheses) and bare links.
 // Splitting one in the middle can turn a citation into a link to the wrong address.
@@ -78,7 +89,7 @@ function answerPages(text: string, firstSize: number): string[] {
   return pages;
 }
 
-export function hallCards(prompt: string, answer: HallReply, emoji: string) {
+export function hallCards(prompt: string, answer: HallReply, emoji: string, ownerId: string, privateReply: boolean) {
   const question = displayText(prompt, MAX_HALL_PROMPT);
   const reply = answer.reply.trim()
     .replace(/[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/gu, '')
@@ -92,5 +103,7 @@ export function hallCards(prompt: string, answer: HallReply, emoji: string) {
   return pages.map((page, index) => card(brandedTitle(index ? 'hallAI · continued' : 'hallAI', emoji), '', [
     ...(index ? [] : [{ name: 'Your question', value: question }]),
     { name: index ? 'Answer continued' : 'Answer', value: page },
-  ], { footer: status + (pages.length > 1 ? ` • ${index + 1}/${pages.length}` : '') }));
+  ], { footer: status + (pages.length > 1 ? ` • ${index + 1}/${pages.length}` : ''),
+    buttons: [new ButtonBuilder().setCustomId(hallForgetId(ownerId, privateReply)).setLabel('Forget').setStyle(ButtonStyle.Secondary)],
+  }));
 }

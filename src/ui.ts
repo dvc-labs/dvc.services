@@ -5,7 +5,7 @@ import {
 } from 'discord.js';
 import type { BulletinStatus } from './bulletin.js';
 import type { Config } from './config.js';
-import { bulletinActionId, BULLETIN_PANEL_BUTTON, BULLETIN_VERIFY_BUTTON, VERIFY_CUSTOM_ID } from './policy.js';
+import { bulletinActionId, BULLETIN_VERIFY_BUTTON, VERIFY_CUSTOM_ID, type BulletinAction } from './policy.js';
 import { BRAND_COLOR, DVC_EMOJI, GITHUB_URL, REPOSITORY_URL, VERSION, WEBSITE_URL } from './version.js';
 
 export interface CardField { name: string; value: string }
@@ -102,26 +102,27 @@ export function verificationPanel(emoji = DVC_EMOJI, bulletinEnabled = false) {
     });
 }
 
-export function bulletinPanel(emoji: string, roleId?: string) {
-  const description = roleId
-    ? `Want to hear about new projects and server updates? Choose whether to receive ${roleMention(roleId)} pings. You can change your choice here any time.`
-    : 'Bulletin preferences are currently disabled.';
-  return card(brandedTitle('dvc.labs Bulletin', emoji), description, [],
-    { buttons: [bulletinOpenButton(BULLETIN_PANEL_BUTTON).setDisabled(!roleId)] });
+function bulletinButton(userId: string, roleId: string, action: BulletinAction, label: string) {
+  return new ButtonBuilder().setCustomId(bulletinActionId(userId, roleId, action)).setLabel(label)
+    .setStyle(action === 'join' ? ButtonStyle.Primary : ButtonStyle.Secondary);
 }
 
-function bulletinButton(userId: string, roleId: string, subscribe: boolean): ButtonBuilder {
-  return new ButtonBuilder().setCustomId(bulletinActionId(userId, roleId, subscribe))
-    .setLabel(subscribe ? 'Get Bulletin pings' : 'Stop Bulletin pings').setStyle(ButtonStyle.Secondary);
+export function verificationReceipt(title: string, description: string, userId: string, bulletinRoleId?: string) {
+  if (!bulletinRoleId) return card(title, description);
+  return card(title, description + '\n\nWould you like to receive announcement bulletins?', [], {
+    buttons: [bulletinButton(userId, bulletinRoleId, 'join', 'Yes'), bulletinButton(userId, bulletinRoleId, 'skip', 'No')],
+  });
 }
 
-// Both public cards open the same private preference card with current role membership.
+// The main verification panel opens this private card with current role membership.
 export function bulletinCard(status: BulletinStatus, userId: string, roleId: string,
   config: Pick<Config, 'emoji' | 'verificationChannelId'>, notice = '') {
   const role = roleMention(roleId);
   const reply = (title: string, description: string, subscribe: boolean | null) =>
     card(brandedTitle(title, config.emoji), notice ? `${notice}\n\n${description}` : description, [],
-      subscribe === null ? {} : { buttons: [bulletinButton(userId, roleId, subscribe)] });
+      subscribe === null ? {} : { buttons: [subscribe
+        ? bulletinButton(userId, roleId, 'join', 'Get Bulletin pings')
+        : bulletinButton(userId, roleId, 'leave', 'Stop Bulletin pings')] });
   switch (status) {
     case 'on':
       return reply('Bulletin pings are on', `You have ${role} for dvc.labs news. Press the button to stop receiving pings.`, false);

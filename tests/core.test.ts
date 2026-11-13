@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import test from 'node:test';
 import { GatewayIntentBits, IntentsBitField, MessageFlags, PermissionFlagsBits, PermissionsBitField } from 'discord.js';
 import { REQUIRED_GATEWAY_INTENTS, clientOptions, intentFailureHint } from '../src/client-options.js';
@@ -52,6 +53,17 @@ test('configuration rejects missing secrets, malformed IDs, invalid ports, and c
     ['VERIFICATION_ROLE_ID', environment().GUILD_ID!], ['VERIFICATION_MESSAGE_ID', 'invalid'],
   ]) {
     assert.throws(() => loadConfig({ ...environment(), [key!]: value }), { name: 'SetupError' });
+  }
+});
+
+test('Minecrafter must be a distinct role and DATA_DIR can be placed outside the checkout', () => {
+  const env: NodeJS.ProcessEnv = { ...environment(), ADMIN_ROLE_ID: '888888888888888888', BULLETIN_ROLE_ID: '999999999999999999' };
+  const config = loadConfig({ ...env, MINECRAFTER_ROLE_ID: '777777777777777777', DATA_DIR: ' /mounted/bot-data ' });
+  assert.equal(config.minecrafterRoleId, '777777777777777777');
+  assert.equal(config.dataDir, '/mounted/bot-data');
+  assert.equal(loadConfig(env).dataDir, resolve('data'));
+  for (const id of [env.GUILD_ID, env.VERIFICATION_ROLE_ID, env.ADMIN_ROLE_ID, env.BULLETIN_ROLE_ID]) {
+    assert.throws(() => loadConfig({ ...env, MINECRAFTER_ROLE_ID: id }), /MINECRAFTER_ROLE_ID must be a separate role/);
   }
 });
 

@@ -10,9 +10,10 @@ export const BULLETIN_VERIFY_BUTTON = 'dvc:bulletin:v3:verify';
 export const BULLETIN_PANEL_BUTTON = 'dvc:bulletin:v3:panel';
 export const BULLETIN_JOIN_REASON = 'dvc.services: member opted in to Bulletin pings';
 export const BULLETIN_LEAVE_REASON = 'dvc.services: member opted out of Bulletin pings';
+export const MINECRAFTER_ROLE_REASON = 'dvc.services: Cherry Creek whitelist request accepted';
 // Role changes the bot already reports itself; their native audit entries stay in the console.
 export const OWN_ROLE_AUDIT_REASONS: ReadonlySet<string> = new Set([
-  VERIFICATION_AUDIT_REASON, BULLETIN_JOIN_REASON, BULLETIN_LEAVE_REASON,
+  VERIFICATION_AUDIT_REASON, BULLETIN_JOIN_REASON, BULLETIN_LEAVE_REASON, MINECRAFTER_ROLE_REASON,
 ]);
 
 export type AccessRoles = Pick<Config, 'verificationRoleId' | 'adminRoleId'>;
@@ -24,13 +25,15 @@ export function serverAccessRole(roles: { has(id: string): boolean }, config: Ac
   return undefined;
 }
 
-export function bulletinActionId(userId: string, roleId: string, subscribe: boolean): string {
-  return `${BULLETIN_CUSTOM_ID_PREFIX}v3:${userId}:${roleId}:${subscribe ? 'join' : 'leave'}`;
+export type BulletinAction = 'join' | 'leave' | 'skip';
+
+export function bulletinActionId(userId: string, roleId: string, action: BulletinAction): string {
+  return `${BULLETIN_CUSTOM_ID_PREFIX}v3:${userId}:${roleId}:${action}`;
 }
 
-export function parseBulletinAction(customId: string): { userId: string; roleId: string; subscribe: boolean } | null {
-  const match = /^dvc:bulletin:v3:(\d{17,20}):(\d{17,20}):(join|leave)$/.exec(customId);
-  return match ? { userId: match[1]!, roleId: match[2]!, subscribe: match[3] === 'join' } : null;
+export function parseBulletinAction(customId: string): { userId: string; roleId: string; action: BulletinAction } | null {
+  const match = /^dvc:bulletin:v3:(\d{17,20}):(\d{17,20}):(join|leave|skip)$/.exec(customId);
+  return match ? { userId: match[1]!, roleId: match[2]!, action: match[3] as BulletinAction } : null;
 }
 
 // Supports both the old action row and the nested action row in a V2 container.

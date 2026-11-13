@@ -1,13 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType, Collection, MessageFlags,
-  PermissionFlagsBits, PermissionsBitField, type Client, type TextChannel } from 'discord.js';
-import { DiscordBulletinGateway, DiscordVerificationGateway, discordPanelRepository, preflight } from '../src/discord.js';
-import { ensureVerificationPanels } from '../src/panel.js';
+  PermissionFlagsBits, PermissionsBitField, RESTJSONErrorCodes, Routes, type Client, type Guild, type TextChannel } from 'discord.js';
+import { DiscordBulletinGateway, DiscordMinecrafterGateway, DiscordVerificationGateway, discordPanelRepository, preflight } from '../src/discord.js';
+import { ensureVerificationPanel } from '../src/panel.js';
 import { BULLETIN_JOIN_REASON, BULLETIN_LEAVE_REASON, BULLETIN_PANEL_BUTTON, BULLETIN_VERIFY_BUTTON,
-  hasEnabledButton, VERIFY_CUSTOM_ID } from '../src/policy.js';
-import { bulletinPanel, verificationPanel } from '../src/ui.js';
-import { messageText, testConfig, TEST_MINECRAFT_CHANNEL_ID, TEST_MOD_CHANNEL_ID } from './helpers.js';
+  hasEnabledButton, MINECRAFTER_ROLE_REASON, VERIFY_CUSTOM_ID } from '../src/policy.js';
+import { card, verificationPanel } from '../src/ui.js';
+import { testConfig, TEST_MINECRAFT_CHANNEL_ID, TEST_MOD_CHANNEL_ID } from './helpers.js';
 import { VerificationService } from '../src/verification.js';
 
 function preflightFixture() {
@@ -36,7 +36,7 @@ function preflightFixture() {
     channels: { fetch: async (id: string) => channels.get(id) },
   };
   const client = { application: { id: config.applicationId }, guilds: { fetch: async () => guild } };
-  return { config, me, channels, roles, hierarchy, memberView, client: client as unknown as Client<true> };
+  return { config, me, channels, roles, hierarchy, memberView, guild, client: client as unknown as Client<true> };
 }
 
 test('startup accepts the documented permissions and requires View Audit Log without Administrator', async () => {
@@ -87,13 +87,13 @@ test('the existing legacy panel upgrades in place and the real adapter finds its
     send: async () => { creates++; return { id: 'another-panel' }; },
   };
   const repository = discordPanelRepository(channel as unknown as TextChannel, config);
-  assert.deepEqual(await ensureVerificationPanels(repository, config.applicationId, false, message.id),
-    { verification: { id: message.id, created: false } });
+  assert.deepEqual(await ensureVerificationPanel(repository, config.applicationId, message.id),
+    { id: message.id, created: false, retiredBulletinCards: 0 });
   assert.equal(edits[0]!.content, null);
   assert.deepEqual(edits[0]!.embeds, []);
   assert.equal(edits[0]!.flags, MessageFlags.IsComponentsV2);
-  assert.deepEqual(await ensureVerificationPanels(repository, config.applicationId, false),
-    { verification: { id: message.id, created: false } });
+  assert.deepEqual(await ensureVerificationPanel(repository, config.applicationId, undefined, false),
+    { id: message.id, created: false, retiredBulletinCards: 0 });
   assert.equal(creates, 0);
   assert.equal(edits.length, 2);
 });
@@ -140,27 +140,75 @@ test('startup names View Server Insights and the affected role without banning i
   await assert.rejects(preflight(f.client, f.config), /Remove View Server Insights from the Bulletin role/);
 });
 
-test('disabling Bulletin updates existing cards in place and re-enabling restores the same card', async () => {
+test('the adapter removes a disabled legacy Bulletin card and keeps preferences on the same verification message', async () => {
   const config = testConfig();
   const roleId = '999999999999999999';
   const verification = { id: '777777777777777777', author: { id: config.applicationId },
-    components: verificationPanel(config.emoji, true).components };
+    components: verificationPanel(config.emoji, false).components };
   const bulletin = { id: '888888888888888888', author: { id: config.applicationId },
-    components: bulletinPanel(config.emoji, roleId).components };
-  const messages = new Collection([[bulletin.id, bulletin], [verification.id, verification]]);
+    components: card('Legacy Bulletin', 'Old preferences', [], { buttons: [new ButtonBuilder().setCustomId(BULLETIN_PANEL_BUTTON)
+      .setLabel('Bulletin preferences').setStyle(ButtonStyle.Secondary).setDisabled(true)] }).components };
+  const other = { ...bulletin, id: '666666666666666666', author: { id: '555555555555555555' } };
+  const messages = new Collection([[bulletin.id, bulletin], [verification.id, verification], [other.id, other]]);
   const channel = { messages: {
-    fetch: async () => messages,
-    edit: async (id: string, payload: ReturnType<typeof bulletinPanel>) => { messages.get(id)!.components = payload.components; },
-  }, send: async () => { assert.fail('Expected both existing messages to be reused'); } };
-  const ensure = (enabled: boolean) => ensureVerificationPanels(discordPanelRepository(channel as unknown as TextChannel,
-    { ...config, bulletinRoleId: enabled ? roleId : undefined }), config.applicationId, enabled);
-  assert.deepEqual(await ensure(false), { verification: { id: verification.id, created: false } });
+    fetch: async ({ before }: { before?: string }) => before ? new Collection() : new Collection(messages),
+    edit: async (id: string, payload: ReturnType<typeof verificationPanel>) => { messages.get(id)!.components = payload.components; },
+    delete: async (id: string) => { messages.delete(id); },
+  }, send: async () => { assert.fail('Expected the existing verification message to be reused'); } };
+  const repository = discordPanelRepository(channel as unknown as TextChannel, { ...config, bulletinRoleId: roleId });
+  assert.deepEqual(await ensureVerificationPanel(repository, config.applicationId),
+    { id: verification.id, created: false, retiredBulletinCards: 1 });
   assert.ok(hasEnabledButton(verification.components.map(c => c.toJSON()), VERIFY_CUSTOM_ID));
-  assert.ok(!JSON.stringify(verification).includes(BULLETIN_VERIFY_BUTTON));
-  assert.match(messageText(bulletin), /Bulletin preferences are currently disabled/);
-  assert.ok(!hasEnabledButton(bulletin.components.map(c => c.toJSON()), BULLETIN_PANEL_BUTTON));
-  assert.deepEqual((await ensure(true)).bulletin, { id: bulletin.id, created: false });
-  assert.ok(hasEnabledButton(bulletin.components.map(c => c.toJSON()), BULLETIN_PANEL_BUTTON));
+  assert.ok(hasEnabledButton(verification.components.map(c => c.toJSON()), BULLETIN_VERIFY_BUTTON));
+  assert.deepEqual([...messages.keys()], [verification.id, other.id]);
+});
+
+test('Minecrafter is awarded once to the eligible applicant and cannot grant access to the moderation channel', async () => {
+  const f = preflightFixture();
+  const roleId = '999999999999999999';
+  const userId = '888888888888888888';
+  const role = { id: roleId, managed: false, permissions: new PermissionsBitField() };
+  f.roles.set(roleId, role);
+  const memberRoles = new Set([f.config.verificationRoleId]);
+  const writes: unknown[] = [];
+  const member = { roles: [...memberRoles], user: { bot: false }, pending: false };
+  let lookupError: Error | undefined;
+  Object.assign(f.guild, { client: { rest: { get: async (route: string) => {
+    assert.equal(route, Routes.guildMember(f.config.guildId, userId));
+    if (lookupError) throw lookupError;
+    return { ...member, roles: [...memberRoles] };
+  } } } });
+  Object.assign(f.guild.members, {
+    addRole: async (options: unknown) => { writes.push(options); memberRoles.add(roleId); },
+  });
+  const gateway = new DiscordMinecrafterGateway(f.guild as unknown as Guild, f.config, roleId,
+    f.channels.get(TEST_MOD_CHANNEL_ID) as unknown as TextChannel);
+  f.memberView.set(TEST_MOD_CHANNEL_ID, new Set([roleId]));
+  await assert.rejects(gateway.prepareAward(userId), /Keep MOD_CHANNEL_ID private/);
+  f.memberView.clear();
+  f.hierarchy.set(roleId, 0);
+  await assert.rejects(gateway.prepareAward(userId), /above the Minecrafter role/);
+  f.hierarchy.clear();
+  const grant = await gateway.prepareAward(userId);
+  assert.deepEqual(writes, []);
+  await grant();
+  await (await gateway.prepareAward(userId))();
+  member.pending = true;
+  await assert.rejects(gateway.prepareAward(userId), /must still have access/);
+  member.pending = false;
+  memberRoles.delete(f.config.verificationRoleId);
+  await assert.rejects(gateway.prepareAward(userId), /must still have access/);
+  assert.equal(await gateway.hasRole(userId, roleId), true);
+  // A stale guild role cache must not hide a held role during recovery.
+  f.roles.delete(roleId);
+  assert.equal(await gateway.hasRole(userId, roleId), true);
+  lookupError = Object.assign(new Error('Unknown member'), { code: RESTJSONErrorCodes.UnknownMember, status: 404 });
+  assert.equal(await gateway.hasRole(userId, roleId), false);
+  f.roles.set(roleId, role);
+  await assert.rejects(gateway.prepareAward(userId), /must still have access/);
+  lookupError = Object.assign(new Error('Missing access'), { code: RESTJSONErrorCodes.MissingAccess, status: 403 });
+  await assert.rejects(gateway.hasRole(userId, roleId), { code: RESTJSONErrorCodes.MissingAccess });
+  assert.deepEqual(writes, [{ user: userId, role: roleId, reason: MINECRAFTER_ROLE_REASON }]);
 });
 
 test('the configured admin role must exist but may carry staff permissions and sit above the bot', async () => {

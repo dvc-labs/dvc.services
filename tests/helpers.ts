@@ -22,6 +22,7 @@ export function testConfig(): Config {
     verificationRoleId: '333333333333333333', adminRoleId: undefined, verificationChannelId: '444444444444444444',
     commandsChannelId: '555555555555555555', logsChannelId: '666666666666666666',
     verificationMessageId: undefined, bulletinRoleId: undefined, modChannelId: undefined, minecraftChannelId: undefined,
+    minecrafterRoleId: undefined, dataDir: '/unused/test/data',
     hallWorkerUrl: undefined, hallApiKey: undefined,
     port: 8080, logLevel: 'error', emoji: DVC_EMOJI };
 }

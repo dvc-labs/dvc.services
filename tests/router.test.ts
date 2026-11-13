@@ -5,6 +5,7 @@ import { AuditLog, type AuditEvent } from '../src/audit.js';
 import type { Config } from '../src/config.js';
 import { SetupError } from '../src/errors.js';
 import { HallError, type HallReply } from '../src/hall.js';
+import { hallCards, hallForgetId } from '../src/hall-ui.js';
 import { Logger } from '../src/logger.js';
 import { memberDetailsId, memberNavigationId, type MemberReport } from '../src/member.js';
 import { BulletinService, type BulletinGateway } from '../src/bulletin.js';
@@ -19,7 +20,7 @@ function fixture(kind: 'command' | 'button' | 'modal' = 'button') {
     token: 'test', guildId: 'guild', applicationId: 'bot', verificationRoleId: 'member-role', adminRoleId: undefined,
     verificationChannelId: 'verification', commandsChannelId: 'commands', logsChannelId: 'logs',
     verificationMessageId: undefined, bulletinRoleId: undefined, hallWorkerUrl: undefined, hallApiKey: undefined,
-    modChannelId: undefined, minecraftChannelId: undefined,
+    modChannelId: undefined, minecraftChannelId: undefined, minecrafterRoleId: undefined, dataDir: '/unused/test/data',
     port: 8080, logLevel: 'error', emoji: '',
   };
   const events: AuditEvent[] = [];
@@ -44,24 +45,23 @@ function fixture(kind: 'command' | 'button' | 'modal' = 'button') {
   let responseCount = 0;
   const deps: RouterDependencies = {
     config, audit, logger, botId: () => 'bot', isReady: () => ready, panelId: () => panelId,
-    bulletinPanelId: () => 'bulletin-panel',
     verification: () => verification,
     memberReport: async () => { throw new Error('Unexpected member lookup'); },
     now: () => now,
-    refreshPanel: async () => { refreshes++; return { verification: { id: 'panel', created: false } }; },
+    refreshPanel: async () => { refreshes++; return { id: 'panel', created: false, retiredBulletinCards: 0 }; },
   };
   const router = new InteractionRouter(deps);
   const raw = {
     kind,
     guildId: 'guild', channelId: kind === 'command' ? 'commands' : 'verification',
-    user: { id: 'member' }, message: { id: 'panel', author: { id: 'bot' }, flags: new MessageFlagsBitField() },
+    user: { id: 'member' }, message: { id: 'panel', author: { id: 'bot' }, flags: new MessageFlagsBitField(),
+      components: [] as { toJSON(): unknown }[] },
     customId: kind === 'modal' ? 'dvc:verify:form:v1:member:panel' : VERIFY_CUSTOM_ID,
     commandName: 'about', memberPermissions: new PermissionsBitField(),
     resolvedMember: { id: '777777777777777777' } as { id: string } | null,
-    prompt: 'How does verification work?', privateReply: false, resetContext: false, hallAction: 'question',
+    prompt: 'How does verification work?' as string | null, privateReply: false, resetContext: false,
     options: { getUser: () => ({ id: '777777777777777777' }), getMember: () => raw.resolvedMember,
-      getString: (): string => raw.prompt, getBoolean: (name: string): boolean => name === 'private' ? raw.privateReply : raw.resetContext,
-      getSubcommand: (): string => raw.hallAction },
+      getString: (): string | null => raw.prompt, getBoolean: (name: string): boolean => name === 'private' ? raw.privateReply : raw.resetContext },
     deferred: false, replied: false, ephemeral: null as boolean | null, responseId: 'reply-0',
     isChatInputCommand: () => raw.kind === 'command', isButton: () => raw.kind === 'button',
     isModalSubmit: () => raw.kind === 'modal',
@@ -509,8 +509,9 @@ test('about sends its public V2 card and records command use', async () => {
 
 const BULLETIN_TEST_USER = '999999999999999999';
 const BULLETIN_ROLE = '888888888888888888';
-const BULLETIN_JOIN_ID = bulletinActionId(BULLETIN_TEST_USER, BULLETIN_ROLE, true);
-const BULLETIN_LEAVE_ID = bulletinActionId(BULLETIN_TEST_USER, BULLETIN_ROLE, false);
+const BULLETIN_JOIN_ID = bulletinActionId(BULLETIN_TEST_USER, BULLETIN_ROLE, 'join');
+const BULLETIN_LEAVE_ID = bulletinActionId(BULLETIN_TEST_USER, BULLETIN_ROLE, 'leave');
+const BULLETIN_SKIP_ID = bulletinActionId(BULLETIN_TEST_USER, BULLETIN_ROLE, 'skip');
 
 function bulletinFixture(member = { verified: true, subscribed: false, bot: false }) {
   const f = fixture();
@@ -530,19 +531,32 @@ function bulletinFixture(member = { verified: true, subscribed: false, bot: fals
     } };
 }
 
-test('verification cards are independent of Bulletin, including for already verified members', async () => {
+test('newly verified members get a private Bulletin choice without automatically subscribing', async () => {
   for (const hasAccess of [false, true]) {
     const f = bulletinFixture();
     f.gateway.getMember = async () => ({ hasAccess, pending: false, bot: false });
     await f.run();
     assert.match(messageText(f.replies[1]), hasAccess ? /Already verified/ : /Member verified/);
-    assert.equal(JSON.stringify(f.replies).includes('dvc:bulletin'), false);
+    const receipt = JSON.stringify(f.replies[1]);
+    assert.equal(f.raw.ephemeral, true);
+    assert.equal(receipt.includes(BULLETIN_JOIN_ID), !hasAccess);
+    assert.equal(receipt.includes(BULLETIN_SKIP_ID), !hasAccess);
+    assert.equal(messageText(f.replies[1]).includes('Would you like to receive announcement bulletins?'), !hasAccess);
     assert.deepEqual(f.writes, []);
     assert.deepEqual(f.awarded, hasAccess ? [] : [BULLETIN_TEST_USER]);
   }
 });
 
-test('both public Bulletin buttons open a private card from current roles without changing them', async () => {
+test('choosing No keeps the member verified and points back to Bulletin preferences without writing a role', async () => {
+  const f = bulletinFixture();
+  await f.click(BULLETIN_SKIP_ID);
+  assert.deepEqual(f.replies[0], { deferUpdate: true });
+  assert.match(messageText(f.replies[1]), /Bulletin preferences/);
+  assert.deepEqual(f.writes, []);
+  assert.deepEqual(f.events, []);
+});
+
+test('the verification panel opens private Bulletin preferences from current roles', async () => {
   const f = bulletinFixture();
   f.useMessage('panel');
   f.raw.customId = BULLETIN_VERIFY_BUTTON;
@@ -552,16 +566,16 @@ test('both public Bulletin buttons open a private card from current roles withou
   // A staff role change outside this bot is reflected in the next card.
   f.member.subscribed = true;
   f.advance(3_001);
-  f.useMessage('bulletin-panel');
-  f.raw.customId = BULLETIN_PANEL_BUTTON;
+  f.useMessage('panel');
+  f.raw.customId = BULLETIN_VERIFY_BUTTON;
   await f.run();
   assert.ok(JSON.stringify(f.replies.at(-1)).includes(BULLETIN_LEAVE_ID));
   assert.deepEqual(f.writes, []);
 });
 
-test('a disabled or replaced Bulletin panel responds privately without changing roles', async () => {
+test('retired Bulletin cards and replaced verification cards cannot change roles', async () => {
   const f = fixture();
-  f.raw.customId = BULLETIN_PANEL_BUTTON;
+  f.raw.customId = BULLETIN_VERIFY_BUTTON;
   f.useMessage('bulletin-panel');
   await f.run();
   assert.equal(f.raw.deferred, false);
@@ -569,7 +583,7 @@ test('a disabled or replaced Bulletin panel responds privately without changing 
   assert.match(messageText(f.replies[0]), /Bulletin unavailable/);
   const replaced = bulletinFixture();
   replaced.raw.customId = BULLETIN_PANEL_BUTTON;
-  replaced.useMessage('old-panel');
+  replaced.useMessage('bulletin-panel');
   await replaced.run();
   assert.equal(replaced.raw.deferred, false);
   assert.deepEqual(replaced.writes, []);
@@ -607,7 +621,7 @@ test('Bulletin denies legacy receipts, other members, public messages and invali
     if (change === 'disabled') f.deps.bulletin = () => undefined;
     if (change === 'owner') f.raw.user.id = '888888888888888888';
     if (change === 'legacy') { f.raw.customId = 'dvc:bulletin:v1:join'; f.raw.channelId = 'verification'; }
-    if (change === 'old-role') f.raw.customId = bulletinActionId(BULLETIN_TEST_USER, '777777777777777777', true);
+    if (change === 'old-role') f.raw.customId = bulletinActionId(BULLETIN_TEST_USER, '777777777777777777', 'join');
     await f.run();
     assert.deepEqual(f.writes, [], change);
     assert.equal(f.raw.deferred, false, change);
@@ -684,11 +698,12 @@ test('/ask defers in the chosen reply mode and keeps the question, answer and co
   for (const privateReply of [false, true]) {
     const f = fixture('command');
     f.raw.commandName = 'ask'; f.raw.privateReply = privateReply; f.raw.resetContext = true;
+    f.raw.user.id = BULLETIN_TEST_USER;
     f.raw.prompt = '  A private test question  ';
     f.deps.hall = { ask: async (scope, prompt, reset) => {
       assert.equal(f.raw.deferred, true);
       assert.equal(f.raw.ephemeral, privateReply);
-      assert.deepEqual(scope, { guildId: 'guild', channelId: 'commands', userId: 'member', private: privateReply });
+      assert.deepEqual(scope, { guildId: 'guild', channelId: 'commands', userId: BULLETIN_TEST_USER, private: privateReply });
       assert.equal(prompt, 'A private test question');
       assert.equal(reset, true);
       return { ...hallAnswer, reply: hallAnswer.reply.repeat(100) };
@@ -701,6 +716,9 @@ test('/ask defers in the chosen reply mode and keeps the question, answer and co
       assert.equal((reply as { flags: number }).flags,
         MessageFlags.IsComponentsV2 | (privateReply ? MessageFlags.Ephemeral : 0));
     }
+    for (const reply of f.replies.slice(1)) {
+      assert.ok(JSON.stringify(reply).includes(hallForgetId(BULLETIN_TEST_USER, privateReply)));
+    }
     assert.equal(f.events.length, 0);
     assert.ok(!JSON.stringify(f.logs).includes('A private test question'));
     assert.ok(!JSON.stringify(f.logs).includes(hallAnswer.reply));
@@ -708,18 +726,44 @@ test('/ask defers in the chosen reply mode and keeps the question, answer and co
 });
 
 test('/ask validates its configuration, prompt, and server channel before contacting Hall', async () => {
-  for (const invalid of ['guild', 'channel', 'disabled', 'blank', 'length']) {
+  for (const invalid of ['guild', 'channel', 'disabled', 'no_prompt', 'blank', 'length']) {
     const f = fixture('command');
     f.raw.commandName = 'ask';
-    if (invalid !== 'disabled') f.deps.hall = { ask: async () => { assert.fail('Unexpected Hall request'); }, forget: async () => {} };
+    if (invalid !== 'disabled') f.deps.hall = { ask: async () => { assert.fail('Unexpected Hall request'); },
+      forget: async () => { assert.fail('Unexpected reset'); } };
     if (invalid === 'guild') f.raw.guildId = 'another';
     if (invalid === 'channel') f.raw.channelId = 'another';
+    if (invalid === 'no_prompt') f.raw.prompt = null;
+    if (['guild', 'channel', 'disabled'].includes(invalid)) {
+      f.raw.prompt = null;
+      f.raw.resetContext = true;
+    }
     if (invalid === 'blank') f.raw.prompt = '   ';
     if (invalid === 'length') f.raw.prompt = 'x'.repeat(1_001);
     await f.run();
     assert.equal(f.raw.deferred, false, invalid);
     assert.equal(f.raw.ephemeral, true, invalid);
     assert.equal(f.replies.length, 1, invalid);
+  }
+});
+
+test('/ask reset:true without a prompt clears the chosen context privately without generating an answer', async () => {
+  for (const privateReply of [false, true]) {
+    const f = fixture('command');
+    f.raw.commandName = 'ask'; f.raw.prompt = null;
+    f.raw.resetContext = true; f.raw.privateReply = privateReply;
+    let resets = 0;
+    f.deps.hall = { ask: async () => { assert.fail('Reset-only must not generate an answer'); }, forget: async scope => {
+      resets++;
+      assert.equal(f.raw.ephemeral, true);
+      assert.deepEqual(scope, { guildId: 'guild', channelId: 'commands', userId: f.raw.user.id, private: privateReply });
+    } };
+    await f.run();
+    assert.equal(resets, 1);
+    assert.deepEqual(f.replies[0], { flags: MessageFlags.Ephemeral });
+    assert.match(messageText(f.replies[1]), new RegExp(`${privateReply ? 'private' : 'public'} conversation context`));
+    assert.deepEqual(f.events, []);
+    assert.deepEqual(f.deleted, []);
   }
 });
 
@@ -732,24 +776,58 @@ test('a failed public /ask leaves no question or upstream error in the channel o
   assert.match(messageText(f.replies[1]), /Request finished/);
   assert.equal((f.replies[2] as { flags: number }).flags, MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral);
   assert.match(messageText(f.replies[2]), /Hall connection was refused/);
-  assert.ok(!JSON.stringify([f.replies, f.logs]).includes(f.raw.prompt));
+  assert.ok(!JSON.stringify([f.replies, f.logs]).includes(f.raw.prompt!));
   assert.equal(f.events.length, 0);
   assert.ok(f.logs.some(([, event, fields]) => event === 'hall_request_failed' && fields?.status === 403));
 });
 
-test('/ask forget clears only the selected conversation and always confirms privately', async () => {
+function forgetFixture(privateReply: boolean) {
+  const f = fixture();
+  f.useMessage('hall-answer', privateReply);
+  f.raw.channelId = 'commands';
+  f.raw.user.id = BULLETIN_TEST_USER;
+  f.raw.customId = hallForgetId(BULLETIN_TEST_USER, privateReply);
+  f.raw.message.components = hallCards('A question', hallAnswer, '', BULLETIN_TEST_USER, privateReply)[0]!.components;
+  return f;
+}
+
+test('Forget clears the conversation for its requester and reply mode, without editing the answer', async () => {
   for (const privateReply of [false, true]) {
-    const f = fixture('command');
-    f.raw.commandName = 'ask'; f.raw.hallAction = 'forget'; f.raw.privateReply = privateReply;
+    const f = forgetFixture(privateReply);
     f.deps.hall = { ask: async () => { assert.fail('Unexpected generation'); }, forget: async scope => {
       assert.equal(f.raw.ephemeral, true);
-      assert.deepEqual(scope, { guildId: 'guild', channelId: 'commands', userId: 'member', private: privateReply });
+      assert.deepEqual(scope, { guildId: 'guild', channelId: 'commands', userId: BULLETIN_TEST_USER, private: privateReply });
     } };
     await f.run();
     assert.deepEqual(f.replies[0], { flags: MessageFlags.Ephemeral });
+    assert.notEqual(f.raw.responseId, f.raw.message.id);
     assert.match(messageText(f.replies[1]), new RegExp(`${privateReply ? 'private' : 'public'} conversation context`));
-    assert.ok(f.logs.some(([, event, fields]) => event === 'command_used' && fields?.command === 'ask forget'));
+    assert.ok(f.logs.some(([, event]) => event === 'hall_context_reset'));
+    assert.deepEqual(f.events, []);
     assert.deepEqual(f.deleted, []);
+  }
+});
+
+test('Forget is denied privately and explains why the button cannot be used', async () => {
+  for (const invalid of ['owner', 'guild', 'channel', 'author', 'visibility', 'missing_button', 'not_ready', 'not_configured']) {
+    const f = forgetFixture(false);
+    if (invalid !== 'not_configured') f.deps.hall = { ask: async () => { assert.fail('Unexpected generation'); },
+      forget: async () => { assert.fail('Unexpected reset'); } };
+    if (invalid === 'owner') f.raw.user.id = '888888888888888888';
+    if (invalid === 'guild') f.raw.guildId = 'elsewhere';
+    if (invalid === 'channel') f.raw.channelId = 'elsewhere';
+    if (invalid === 'author') f.raw.message.author.id = 'elsewhere';
+    if (invalid === 'visibility') f.raw.message.flags.add(MessageFlags.Ephemeral);
+    if (invalid === 'missing_button') f.raw.message.components = [];
+    if (invalid === 'not_ready') f.setReady(false);
+    await f.run();
+    assert.equal(f.raw.deferred, false, invalid);
+    assert.equal(f.raw.ephemeral, true, invalid);
+    assert.deepEqual(f.events, [], invalid);
+    const wording = invalid === 'owner' ? /Only the member who asked/
+      : invalid === 'not_ready' ? /Bot not ready/
+        : invalid === 'not_configured' ? /Hall connection is not configured/ : /This button can’t be used here/;
+    assert.match(messageText(f.replies[0]), wording, invalid);
   }
 });
 

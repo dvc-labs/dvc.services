@@ -4,11 +4,15 @@ services:
     restart: unless-stopped
     init: true
     env_file: .env
+    environment:
+      DATA_DIR: /data
     mem_limit: 512m
     cpus: 0.5
     read_only: true
     tmpfs:
       - /tmp:size=16m,mode=1777
+    volumes:
+      - bot_data:/data
     cap_drop:
       - ALL
     security_opt:
@@ -19,5 +23,6 @@ services:
       options:
         max-size: 5m
         max-file: "3"
-    # No published ports or persistent volumes are needed.
     # Docker checks /readyz internally; Discord uses an outbound Gateway session.
+volumes:
+  bot_data:

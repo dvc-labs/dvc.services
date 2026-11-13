@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { MessageFlags } from 'discord.js';
 import { HallClient, type HallReply, type HallScope } from '../src/hall.js';
-import { hallCards } from '../src/hall-ui.js';
+import { hallCards, hallForgetId } from '../src/hall-ui.js';
+import { hasEnabledButton } from '../src/policy.js';
 import { messageText } from './helpers.js';
 
 const scope: HallScope = { guildId: '111111111111111111', channelId: '222222222222222222',
@@ -57,7 +58,7 @@ test('an invalid reply or overlarge response cannot become a Discord answer', as
   }
 });
 
-test('Hall limits parallel requests across members and shares a cooldown across reply modes and reset', async () => {
+test('Hall shares concurrency limits but lets a member forget immediately after an answer', async () => {
   let now = 1;
   let calls = 0;
   let release!: () => void;
@@ -74,10 +75,12 @@ test('Hall limits parallel requests across members and shares a cooldown across 
     await assert.rejects(client.ask({ ...scope, userId: 'third' }, 'question', false), { kind: 'busy' });
     assert.equal(calls, 2);
   } finally { release(); await Promise.all([first, second]); }
-  await assert.rejects(client.forget(scope), { kind: 'rate_limited' });
+  await client.forget(scope);
+  await assert.rejects(client.forget({ ...scope, private: false }), { kind: 'rate_limited' });
+  await assert.rejects(client.ask({ ...scope, private: false }, 'question', false), { kind: 'rate_limited' });
   now += 12_000;
   await client.forget({ ...scope, private: false });
-  assert.equal(calls, 3);
+  assert.equal(calls, 4);
 });
 
 test('shutting down aborts an in-flight request and prevents another upstream call', async () => {
@@ -99,7 +102,7 @@ test('shutting down aborts an in-flight request and prevents another upstream ca
 test('V2 responses show the escaped question and answer, retain source links, and cannot ping members', () => {
   const source = '[Wikipedia](https://en.wikipedia.org/wiki/Discord_(software))';
   const pages = hallCards('Look up [an unsafe link](https://example.invalid/) @everyone', { ...hallReply,
-    reply: `Hi <@123456789012345678>.\n${source}` }, '');
+    reply: `Hi <@123456789012345678>.\n${source}` }, '', scope.userId, false);
   assert.equal(pages.length, 1);
   const page = pages[0]!;
   assert.equal(page.flags, MessageFlags.IsComponentsV2);
@@ -116,7 +119,7 @@ test('long responses retain the full question, Unicode, complete links and fence
   const source = '[A source](https://example.com/wiki/Test_(article))';
   const prompt = '*'.repeat(998) + '😀';
   const code = 'const x = "😀";\n'.repeat(280);
-  const pages = hallCards(prompt, { ...hallReply, reply: `${source}\n\n\`\`\`js\n${code}\`\`\`\nFinal line.`, truncated: true }, '');
+  const pages = hallCards(prompt, { ...hallReply, reply: `${source}\n\n\`\`\`js\n${code}\`\`\`\nFinal line.`, truncated: true }, '', scope.userId, true);
   assert.ok(pages.length > 2);
   const rendered = pages.map(page => {
     const text = messageText(page);
@@ -124,7 +127,7 @@ test('long responses retain the full question, Unicode, complete links and fence
     assert.ok(!/[\uD800-\uDFFF]/u.test(text));
     assert.ok(!text.includes('Further details'));
     assert.equal((text.match(/^```/gm)?.length ?? 0) % 2, 0);
-    page.components.forEach(component => component.toJSON());
+    assert.ok(hasEnabledButton(page.components.map(component => component.toJSON()), hallForgetId(scope.userId, true)));
     return text;
   });
   assert.ok(rendered[0]!.includes('\\*'.repeat(998) + '😀'));
@@ -135,7 +138,7 @@ test('long responses retain the full question, Unicode, complete links and fence
 
 test('a citation larger than a V2 card is displayed as inert text without a partial live link', () => {
   const url = `https://example.com/${'a'.repeat(3_000)}`;
-  const pages = hallCards('A question', { ...hallReply, reply: `[Source](${url})\nEnding.` }, '');
+  const pages = hallCards('A question', { ...hallReply, reply: `[Source](${url})\nEnding.` }, '', scope.userId, false);
   assert.ok(pages.length > 1);
   const text = pages.map(messageText).join('\n');
   assert.ok(!text.includes('https://example.com/'));
