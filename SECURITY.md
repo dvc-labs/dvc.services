@@ -22,7 +22,7 @@ Include the affected commit/version, a concise description, expected impact, and
 - If exposed, reset the token in Discord immediately, update the hosted secret, and restart the service. Removing a leaked file is insufficient.
 - Install the bot only into the intended guild. The code also restricts interactions to `GUILD_ID`.
 - Grant View Channels, Send Messages, Embed Links, Read Message History, Manage Roles, and View Audit Log. Administrator is unnecessary. Grant history access in all three configured channels.
-- Put the bot above the ordinary member verification and optional Bulletin roles and below privileged team roles. Do not configure a staff role as the verification or Bulletin role; the bot rejects administrative/moderation role permissions it recognises.
+- Put the bot above the ordinary member verification and optional Bulletin roles and below privileged team roles. Do not configure a staff role as the verification or Bulletin role; the bot rejects View Server Insights and the administrative/moderation permissions it recognises.
 - Keep the logs channel private and choose an appropriate retention period for provider console logs and Discord messages. IDs identify people even when usernames and message content are absent.
 - Restrict access to host configuration and deployment controls. Only trusted changes should reach production; reviews and branch protection are recommended.
 - v0.2.0 requests an explicit list of five used Gateway intents (bitfield 391). Enable Presence and Server Members in the Portal. Message Content and incoming DM intents are not requested. Dependency upgrades do not automatically broaden subscriptions. Missing authorisation for a required privileged intent can prevent login; the corrective hint is restricted to DisallowedIntents/4014.
@@ -49,6 +49,8 @@ Discord delivery is best effort with explicit routine, important-success, and cr
 ## Cherry Creek whitelist requests
 
 Only members with the verification or configured admin role can submit their Java username. The username, Discord account reference, and review result are stored on the private moderation message until removed under server retention policy. Staff should keep the moderation channel and its permissions private. The bot rejects public access for the default and self-assignable roles at startup. Console and audit entries include identifiers, result and links to the staff card or notice; they omit the submitted username.
+
+One pending card is allowed per Discord account. Submissions check only the bot's own enabled review buttons in uncached moderation history. Missing history permissions or an incomplete scan block new requests; duplicate attempts and history check errors stay in the operator console.
 
 Review actions require Manage Server or Moderate Members and an active button on a freshly fetched, bot-authored moderation card. The final decision is saved before notifying the applicant. A positive notice mentions only the applicant and contains the fixed server address and website. Declines are staff-only. Paper whitelisting is done manually before Accept; the bot does not store Minecraft credentials or connect to the server console. Run a single bot instance.
 

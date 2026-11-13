@@ -5,8 +5,9 @@ import {
 } from 'discord.js';
 import type { AuditLog } from './audit.js';
 import type { Config } from './config.js';
+import { SetupError } from './errors.js';
 import { errorSummary } from './logger.js';
-import { Cooldown, hasEnabledButton, serverAccessRole } from './policy.js';
+import { Cooldown, hasEnabledButton, hasMatchingButton, serverAccessRole } from './policy.js';
 import { card, discordTime } from './ui.js';
 
 export const CHERRY_MODAL_ID = 'dvc:cherry:v1:request';
@@ -16,6 +17,8 @@ const JAVA_USERNAME = /^[A-Za-z0-9_]{3,16}$/;
 const SERVER = 'play.cherrycreek.app';
 const WEBSITE = 'https://cherrycreek.app/';
 const CHERRY_COLOR = 0xffb7c5;
+const HISTORY_PAGE_SIZE = 100;
+const HISTORY_CHECK_BUDGET_MS = 20_000;
 
 interface CherryRequest { applicantId: string; username: string }
 type Decision = 'accepted' | 'declined';
@@ -101,6 +104,30 @@ export class CherryCreek {
     return 'form_opened';
   }
 
+  private async hasPendingRequest(applicantId: string): Promise<boolean> {
+    const deadline = this.now() + HISTORY_CHECK_BUDGET_MS;
+    const assertCanCheck = () => {
+      if (this.now() >= deadline) throw new SetupError('Cherry Creek moderation history check exceeded its time budget.');
+      // Discord can return an empty page for missing Read Message History.
+      if (!this.mod.permissionsFor(this.config.applicationId)?.has([PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ReadMessageHistory])) {
+        throw new SetupError('Cherry Creek needs View Channel and Read Message History in MOD_CHANNEL_ID to check pending requests.');
+      }
+    };
+    let before: string | undefined;
+    assertCanCheck();
+    for (;;) {
+      const messages = await this.mod.messages.fetch({ limit: HISTORY_PAGE_SIZE, cache: false, ...(before ? { before } : {}) });
+      assertCanCheck();
+      if (messages.some(message => message.author.id === this.config.applicationId
+        && hasMatchingButton(message.components.map(component => component.toJSON()),
+          (id, disabled) => !disabled && parseReview(id)?.applicantId === applicantId))) return true;
+      if (messages.size < HISTORY_PAGE_SIZE) return false;
+      const next = messages.lastKey()!;
+      if (before && BigInt(next) >= BigInt(before)) throw new SetupError('Cherry Creek moderation history pagination did not advance.');
+      before = next;
+    }
+  }
+
   async submit(interaction: ModalSubmitInteraction): Promise<void> {
     if (!this.eligible(interaction)) {
       await this.reply(interaction, 'Request unavailable', 'Verify in dvc.labs, then open a new /cherrycreek form.');
@@ -119,6 +146,21 @@ export class CherryCreek {
     this.submitting.add(applicantId);
     try {
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+      let pending: boolean;
+      try { pending = await this.hasPendingRequest(applicantId); }
+      catch (error) {
+        this.audit.record({ event: 'cherry_pending_check_failed', title: 'Cherry Creek pending request check failed',
+          outcome: 'history_unconfirmed', userId: applicantId, channelId: this.mod.id, discord: false,
+          detail: error instanceof SetupError ? error.message : errorSummary(error) });
+        await this.reply(interaction, 'Request not sent', 'The bot couldn’t check for a pending request. Please try again later or ask a moderator.');
+        return;
+      }
+      if (pending) {
+        this.audit.record({ event: 'cherry_request_blocked', title: 'Cherry Creek request already pending',
+          outcome: 'already_pending', userId: applicantId, channelId: this.mod.id, discord: false });
+        await this.reply(interaction, 'Request already pending', 'You already have an open Cherry Creek request. Please wait for the team to review it.');
+        return;
+      }
       let messageId: string;
       try {
         const message = await this.mod.send({ ...requestCard({ applicantId, username }), nonce: 'ccr' + interaction.id, enforceNonce: true });
@@ -149,8 +191,12 @@ export class CherryCreek {
       await this.reply(interaction, 'Staff review only', 'Use the buttons on a pending request in the moderation channel.');
       return;
     }
-    if (this.reviewing.has(messageId) || this.reviewing.size >= 5) {
+    if (this.reviewing.has(messageId)) {
       await this.reply(interaction, 'Review in progress', 'Give the bot a moment, then check the request card.');
+      return;
+    }
+    if (this.reviewing.size >= 5) {
+      await this.reply(interaction, 'Review queue busy', 'The bot is handling other requests. Please try again shortly.');
       return;
     }
     this.reviewing.add(messageId);

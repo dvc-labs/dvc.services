@@ -1,14 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { MessageFlags, PermissionFlagsBits, PermissionsBitField, type ButtonInteraction,
+import { Collection, MessageFlags, PermissionFlagsBits, PermissionsBitField, type ButtonInteraction,
   type ChatInputCommandInteraction, type ModalSubmitInteraction, type TextChannel } from 'discord.js';
 import { AuditLog, type AuditEvent } from '../src/audit.js';
 import { CHERRY_MODAL_ID, CherryCreek } from '../src/cherry-creek.js';
 import { Logger } from '../src/logger.js';
-import { messageText, testConfig } from './helpers.js';
+import { messageText, testConfig, TEST_MINECRAFT_CHANNEL_ID as MINECRAFT, TEST_MOD_CHANNEL_ID as MOD } from './helpers.js';
 
-const MOD = '1562226019631366144';
-const MINECRAFT = '1569106176799408261';
 const APPLICANT = '777777777777777777';
 const MODERATOR = '888888888888888888';
 const MESSAGE = '999999999999999991';
@@ -16,6 +14,7 @@ const ANNOUNCEMENT = '999999999999999992';
 const USERNAME = 'Cherry_Player';
 const BUTTON = 'dvc:cherry:v1:review:accepted:' + APPLICANT + ':' + USERNAME;
 type MessagePayload = { components: { toJSON(): unknown }[]; flags: number; allowedMentions?: unknown; nonce?: string; enforceNonce?: boolean };
+type StaffMessage = { id: string; author: { id: string }; components: MessagePayload['components'] };
 
 function fixture() {
   const config = { ...testConfig(), modChannelId: MOD, minecraftChannelId: MINECRAFT };
@@ -28,21 +27,42 @@ function fixture() {
   const modPosts: MessagePayload[] = [];
   const announcements: MessagePayload[] = [];
   const edits: MessagePayload[] = [];
-  const message = { author: { id: config.applicationId }, components: [] as MessagePayload['components'] };
+  const message: StaffMessage = { id: MESSAGE, author: { id: config.applicationId }, components: [] };
+  const history = new Collection<string, StaffMessage>();
+  const historyReads: (string | undefined)[] = [];
+  const permissions = new PermissionsBitField([PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ReadMessageHistory]);
   const options = {
     failAnnouncement: false, failDecision: false, failReceipt: false,
-    async beforeEdit() {}, async beforeAnnounce() {},
+    async beforeEdit() {}, async beforeAnnounce() {}, async beforeHistory() {}, async beforeSend() {},
   };
   const mod = {
     id: MOD,
+    permissionsFor: () => permissions,
     send: async (payload: MessagePayload) => {
-      modPosts.push(payload); message.components = payload.components;
-      return { id: MESSAGE };
+      await options.beforeSend();
+      const post = modPosts.length === 0 ? message : {
+        id: String(BigInt(MESSAGE) + BigInt(modPosts.length) * 10n), author: { id: config.applicationId },
+        components: payload.components,
+      };
+      modPosts.push(payload); post.components = payload.components;
+      history.set(post.id, post);
+      return post;
     },
     messages: {
-      fetch: async ({ message: id, cache, force }: { message: string; cache: boolean; force: boolean }) => {
-        assert.equal(id, MESSAGE); assert.equal(cache, false); assert.equal(force, true);
-        return message;
+      fetch: async ({ message: id, cache, force, limit, before }: {
+        message?: string; cache: boolean; force?: boolean; limit?: number; before?: string
+      }) => {
+        assert.equal(cache, false);
+        if (id) {
+          assert.equal(force, true);
+          return history.get(id);
+        }
+        assert.equal(limit, 100);
+        historyReads.push(before);
+        await options.beforeHistory();
+        const sorted = [...history.values()].filter(item => !before || BigInt(item.id) < BigInt(before))
+          .sort((a, b) => BigInt(a.id) > BigInt(b.id) ? -1 : 1).slice(0, limit);
+        return new Collection(sorted.map(item => [item.id, item]));
       },
       edit: async (_id: string, payload: MessagePayload) => {
         await options.beforeEdit();
@@ -56,12 +76,14 @@ function fixture() {
     if (options.failAnnouncement) throw new Error('private REST details');
     announcements.push(payload); return { id: ANNOUNCEMENT };
   } };
-  const freshService = () => new CherryCreek(config, mod as unknown as TextChannel, minecraft as unknown as TextChannel, audit, () => 1_800_000_000_000);
+  let now = 1_800_000_000_000;
+  const freshService = () => new CherryCreek(config, mod as unknown as TextChannel, minecraft as unknown as TextChannel, audit, () => now);
   const service = freshService();
+  let interactionId = 777777777777777776n;
   function interaction() {
     const replies: unknown[] = [];
     const raw = {
-      id: '777777777777777776', guildId: config.guildId, channelId: MINECRAFT,
+      id: String(interactionId++), guildId: config.guildId, channelId: MINECRAFT,
       user: { id: APPLICANT, bot: false }, member: { roles: [config.verificationRoleId], pending: false },
       memberPermissions: new PermissionsBitField(), deferred: false,
       message: { id: MESSAGE, author: { id: config.applicationId } }, username: USERNAME, customId: BUTTON,
@@ -81,8 +103,9 @@ function fixture() {
     return r;
   }
   return { service, freshService, modPosts, announcements, edits, interaction, reviewer, audit, auditEvents, consoleLogs,
-    config, options, message, submit: async () => {
-      const f = interaction(); await service.submit(f.modal); return f;
+    config, options, message, history, historyReads, permissions, advance: (ms: number) => { now += ms; },
+    submit: async (activeService = service) => {
+      const f = interaction(); await activeService.submit(f.modal); return f;
     } };
 }
 
@@ -127,12 +150,81 @@ test('submit rechecks access and channel and rejects invalid Java names before p
   }
 });
 
-test('a member cannot flood the moderation channel via repeated forms', async () => {
+test('the cooldown avoids additional history reads from immediate resubmissions', async () => {
   const f = fixture();
   await f.submit();
   const repeated = await f.submit();
   assert.equal(f.modPosts.length, 1);
+  assert.equal(f.historyReads.length, 1);
   assert.match(messageText(repeated.replies[0]), /Please wait/);
+});
+
+test('an open request blocks a different username after cooldown and after restart past the first history page', async () => {
+  const f = fixture();
+  await f.submit();
+  f.advance(60_001);
+  const duplicate = f.interaction(); duplicate.raw.username = 'Another_Player';
+  await f.service.submit(duplicate.modal);
+  assert.match(messageText(duplicate.replies.at(-1)), /Request already pending/);
+  for (let i = 1n; i <= 101n; i++) {
+    const id = String(BigInt(MESSAGE) + i);
+    f.history.set(id, { id, author: { id: MODERATOR }, components: f.message.components });
+  }
+  const afterRestart = await f.submit(f.freshService());
+  await f.audit.flush();
+  assert.match(messageText(afterRestart.replies.at(-1)), /Request already pending/);
+  assert.ok(f.historyReads.at(-1));
+  assert.equal(f.modPosts.length, 1);
+  assert.equal(f.auditEvents.length, 1);
+  assert.ok(f.consoleLogs.some(entry => Array.isArray(entry) && entry[1] === 'cherry_request_blocked'));
+});
+
+test('other members and closed requests do not block a new submission', async () => {
+  const f = fixture();
+  await f.submit();
+  const other = f.interaction(); other.raw.user.id = '888888888888888886';
+  await f.service.submit(other.modal);
+  assert.match(messageText(other.replies.at(-1)), /Request sent/);
+  const reviewer = f.reviewer(); reviewer.raw.customId = BUTTON.replace('accepted', 'declined');
+  await f.service.review(reviewer.button, f.config.applicationId);
+  f.advance(60_001);
+  const resubmission = await f.submit();
+  assert.match(messageText(resubmission.replies.at(-1)), /Request sent/);
+  assert.equal(f.modPosts.length, 3);
+});
+
+test('a member cannot submit again while the first card is posting even after the cooldown', async () => {
+  const f = fixture();
+  let entered!: () => void;
+  let release!: () => void;
+  const posting = new Promise<void>(resolve => { entered = resolve; });
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  f.options.beforeSend = async () => { entered(); await gate; };
+  const first = f.submit();
+  await posting;
+  try {
+    f.advance(60_001);
+    const second = await f.submit();
+    assert.match(messageText(second.replies[0]), /Please wait/);
+  } finally { release(); await first; }
+  assert.equal(f.historyReads.length, 1);
+  assert.equal(f.modPosts.length, 1);
+});
+
+test('a lost history permission, failed fetch or expired history check never posts the request', async () => {
+  for (const failure of ['permission', 'revoked', 'fetch', 'timeout']) {
+    const f = fixture();
+    if (failure === 'permission') f.permissions.remove(PermissionFlagsBits.ReadMessageHistory);
+    if (failure === 'revoked') f.options.beforeHistory = async () => { f.permissions.remove(PermissionFlagsBits.ReadMessageHistory); };
+    if (failure === 'fetch') f.options.beforeHistory = async () => { throw new Error('private REST details'); };
+    if (failure === 'timeout') f.options.beforeHistory = async () => { f.advance(20_001); };
+    const failed = await f.submit();
+    await f.audit.flush();
+    assert.match(messageText(failed.replies.at(-1)), /Request not sent/, failure);
+    assert.equal(f.modPosts.length, 0, failure);
+    assert.equal(f.auditEvents.length, 0, failure);
+    assert.ok(!JSON.stringify(f.consoleLogs).includes('private REST details'));
+  }
 });
 
 test('accept saves and closes the request before pinging only the applicant with the Java address', async () => {

@@ -23,7 +23,6 @@ export async function ensureVerificationPanels(
   bulletinEnabled: boolean,
   preferredId?: string,
 ): Promise<VerificationPanels> {
-  const types: PanelKind[] = bulletinEnabled ? ['verification', 'bulletin'] : ['verification'];
   const found: Partial<Record<PanelKind, string>> = {};
 
   if (preferredId) {
@@ -34,16 +33,16 @@ export async function ensureVerificationPanels(
     found.verification = message.id;
   }
 
-  // Find both cards in a single history walk, discarding each page before the next.
+  // Find both cards in a single history walk, including a Bulletin card we need to disable.
   let before: string | undefined;
-  while (!types.every(kind => found[kind])) {
+  while (!found.verification || !found.bulletin) {
     const messages = await repository.list(before);
     for (const message of messages) {
-      if (message.authorId === botId && message.kind && types.includes(message.kind) && !found[message.kind]) {
+      if (message.authorId === botId && message.kind && !found[message.kind]) {
         found[message.kind] = message.id;
       }
     }
-    if (messages.length === 0 || types.every(kind => found[kind])) break;
+    if (messages.length === 0 || (found.verification && found.bulletin)) break;
     const next = messages.at(-1)!.id;
     if (next === before) throw new SetupError('Verification history pagination did not advance.');
     before = next;
@@ -55,5 +54,7 @@ export async function ensureVerificationPanels(
     return { id, created: false };
   }
   const verification = await ensure('verification');
-  return bulletinEnabled ? { verification, bulletin: await ensure('bulletin') } : { verification };
+  if (bulletinEnabled) return { verification, bulletin: await ensure('bulletin') };
+  if (found.bulletin) await repository.update(found.bulletin, 'bulletin');
+  return { verification };
 }

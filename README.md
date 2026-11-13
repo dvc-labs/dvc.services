@@ -53,7 +53,11 @@ Stop the old instance before upgrading. Forms opened on older releases are ignor
 
 Role assignability is checked at startup and before each change. Use ordinary roles for verification and Bulletin, and place both below the bot's highest role. The bot rejects `@everyone`, integration-managed roles, and roles with administrative or moderation permissions. `ADMIN_ROLE_ID` must be a separate existing role. It can be above the bot because the bot only checks membership. Discord channel overrides and staff command permissions still apply independently.
 
+Before upgrading, check that **View Server Insights** is off on both self-assignable roles. If enabled on either role, startup names the role to fix. The bot's own role can keep the permission; boost logs do not require it.
+
 **Bulletin preferences** is separate from **Verify**, so a member can choose after verifying or revisit their choice on the second card. Both entry points fetch current membership on open; each private action checks current membership again. Opting in requires verification or the configured admin role; a subscriber who loses access can still opt out. The private card edits in place, and only its owner can use it. Actions are limited to once every three seconds. The bot reuses its two public messages on restart; `/verification` refreshes both. Legacy buttons cannot change roles and direct members to the current cards.
+
+Clearing `BULLETIN_ROLE_ID` and restarting removes the Bulletin control from verification and disables the separate card in place, if one exists. Setting the role again reuses that card. Clearing the setting does not strip the role from existing subscribers.
 
 `/member` fetches only the selected member and their public user profile. Lookups are limited to once per user every **10 seconds**. Public profiles remain in the commands channel. Page changes use a stable **two-minute per-message snapshot**, are limited to once every **two seconds**, and **do not refetch member/profile data**. The snapshot cache holds at most 100 reports; expired/evicted reports ask for a new lookup. Lookups, page edits, and private detail requests share a token bucket with five initial operations, one refill every two seconds, and a two-operation concurrency cap. Private-detail requests share the two-second per-user page interval. Discord.js also handles Discord's REST rate limits.
 
@@ -96,13 +100,22 @@ Leave `VERIFICATION_MESSAGE_ID` empty for automatic discovery. If set, it must r
 
 ## Cherry Creek whitelist
 
-Set both channel IDs at runtime to enable the workflow. In dvc.labs, `MOD_CHANNEL_ID=1562226019631366144` and `MINECRAFT_CHANNEL_ID=1569106176799408261`. Both must be separate standard text channels. Allow the bot to view, send, read history, and embed links in both channels; keep the moderation channel visible only to staff and the bot. Applicants need Use Application Commands in the Minecraft or commands channel and must be able to read the Minecraft channel to see an approval.
+Set both channel IDs in your host's runtime environment to enable the workflow:
+
+```env
+MOD_CHANNEL_ID=YOUR_PRIVATE_MODERATION_CHANNEL_ID
+MINECRAFT_CHANNEL_ID=YOUR_MINECRAFT_CHANNEL_ID
+```
+
+Use separate standard text channels. Allow the bot to view, send, read history, and embed links in both channels; keep the moderation channel visible only to staff and the bot. Applicants need Use Application Commands in the Minecraft or commands channel and must be able to read the Minecraft channel to see an approval.
 
 1. A verified member runs `/cherrycreek` and submits their Java username. The bot validates the name, sends the request to staff, and confirms submission privately.
 2. Staff with **Manage Server** or **Moderate Members** can review it. To approve, run the card's `whitelist add <username>` command in the Paper console and wait for confirmation, then click **Accept**. This bot does not connect to Paper.
 3. Accept closes the staff card and posts one pink approval card mentioning only the applicant. It includes the Java address `play.cherrycreek.app` and a [Cherry Creek website](https://cherrycreek.app/) link. **Decline** closes the request without posting publicly.
 
-Requests and their review status live in Discord, so pending cards still work after restart. If the bot cannot confirm an approval notice, it leaves the accepted decision in place and tells staff to check the Minecraft channel before notifying manually. The Java username stays on the private moderation message; it is not repeated in logs or the public approval. Include the username, the Discord account link, and the retention of moderation cards in your privacy notice. Leave both channel variables blank to disable requests.
+Each Discord member can have one pending request at a time. The bot checks its open moderation cards in Discord history before posting, so the limit survives restarts and still applies when a member enters a different Java username. It keeps a short cooldown to limit repeated checks. If the bot cannot finish checking history, it asks the member to try again without posting another card. Once a request is closed, the member can submit again after the cooldown.
+
+If the bot cannot confirm an approval notice, it leaves the accepted decision in place and tells staff to check the Minecraft channel before notifying manually. The Java username stays on the private moderation message; it is not repeated in logs or the public approval. Include the username, the Discord account link, and the retention of moderation cards in your privacy notice. Leave both channel variables blank to disable requests.
 
 ## Hall setup and privacy
 

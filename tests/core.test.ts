@@ -9,6 +9,7 @@ import { errorSummary } from '../src/logger.js';
 import { assertSafeMemberRole, Cooldown, hasEnabledButton, isTrustedVerificationButton, VERIFY_CUSTOM_ID } from '../src/policy.js';
 import { verificationPanel } from '../src/ui.js';
 import { BRAND_COLOR, VERSION } from '../src/version.js';
+import { TEST_MINECRAFT_CHANNEL_ID as minecraft, TEST_MOD_CHANNEL_ID as mod } from './helpers.js';
 
 export function environment(): NodeJS.ProcessEnv {
   return {
@@ -32,8 +33,6 @@ test('configuration preserves snowflakes as exact strings and applies defaults',
 });
 
 test('Cherry Creek accepts a separate pair of configured channels and rejects half-configured or overlapping destinations', () => {
-  const mod = '1562226019631366144';
-  const minecraft = '1569106176799408261';
   assert.equal(loadConfig(environment()).modChannelId, undefined);
   const config = loadConfig({ ...environment(), MOD_CHANNEL_ID: mod, MINECRAFT_CHANNEL_ID: minecraft });
   assert.equal(config.modChannelId, mod);

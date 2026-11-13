@@ -1,6 +1,9 @@
 import type { Config } from '../src/config.js';
 import { DVC_EMOJI } from '../src/version.js';
 
+export const TEST_MOD_CHANNEL_ID = '777777777777777778';
+export const TEST_MINECRAFT_CHANNEL_ID = '777777777777777779';
+
 export function messageText(payload: unknown): string {
   const data: unknown = JSON.parse(JSON.stringify(payload));
   function walk(value: unknown): string[] {

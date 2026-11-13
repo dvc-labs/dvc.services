@@ -4,7 +4,7 @@ import type { Config } from './config.js';
 import { SetupError } from './errors.js';
 import type { PanelKind, PanelMessage, PanelRepository } from './panel.js';
 import type { BulletinGateway } from './bulletin.js';
-import { assertSafeMemberRole, BULLETIN_JOIN_REASON, BULLETIN_LEAVE_REASON, BULLETIN_PANEL_BUTTON, hasEnabledButton,
+import { assertSafeMemberRole, BULLETIN_JOIN_REASON, BULLETIN_LEAVE_REASON, BULLETIN_PANEL_BUTTON, hasEnabledButton, hasMatchingButton,
   serverAccessRole, VERIFICATION_AUDIT_REASON, VERIFY_CUSTOM_ID, type AccessRoles } from './policy.js';
 import { bulletinPanel, verificationPanel } from './ui.js';
 import type { VerificationGateway } from './verification.js';
@@ -76,13 +76,13 @@ function panelMessage(message: Message): PanelMessage {
     id: message.id,
     authorId: message.author.id,
     kind: hasEnabledButton(components, VERIFY_CUSTOM_ID) ? 'verification'
-      : hasEnabledButton(components, BULLETIN_PANEL_BUTTON) ? 'bulletin' : undefined,
+      : hasMatchingButton(components, id => id === BULLETIN_PANEL_BUTTON) ? 'bulletin' : undefined,
   };
 }
 
 export function discordPanelRepository(channel: TextChannel, config: Pick<Config, 'emoji' | 'bulletinRoleId'>): PanelRepository {
   const payload = (kind: PanelKind) => kind === 'verification'
-    ? verificationPanel(config.emoji, !!config.bulletinRoleId) : bulletinPanel(config.emoji, config.bulletinRoleId!);
+    ? verificationPanel(config.emoji, !!config.bulletinRoleId) : bulletinPanel(config.emoji, config.bulletinRoleId);
   return {
     async get(id) {
       try { return panelMessage(await channel.messages.fetch({ message: id, cache: false, force: true })); }

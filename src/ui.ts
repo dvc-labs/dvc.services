@@ -102,10 +102,12 @@ export function verificationPanel(emoji = DVC_EMOJI, bulletinEnabled = false) {
     });
 }
 
-export function bulletinPanel(emoji: string, roleId: string) {
-  return card(brandedTitle('dvc.labs Bulletin', emoji),
-    `Want to hear about new projects and server updates? Choose whether to receive ${roleMention(roleId)} pings. You can change your choice here any time.`,
-    [], { buttons: [bulletinOpenButton(BULLETIN_PANEL_BUTTON)] });
+export function bulletinPanel(emoji: string, roleId?: string) {
+  const description = roleId
+    ? `Want to hear about new projects and server updates? Choose whether to receive ${roleMention(roleId)} pings. You can change your choice here any time.`
+    : 'Bulletin preferences are currently disabled.';
+  return card(brandedTitle('dvc.labs Bulletin', emoji), description, [],
+    { buttons: [bulletinOpenButton(BULLETIN_PANEL_BUTTON).setDisabled(!roleId)] });
 }
 
 function bulletinButton(userId: string, roleId: string, subscribe: boolean): ButtonBuilder {

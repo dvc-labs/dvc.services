@@ -34,15 +34,21 @@ export function parseBulletinAction(customId: string): { userId: string; roleId:
 }
 
 // Supports both the old action row and the nested action row in a V2 container.
-export function hasEnabledButton(components: readonly unknown[], customId: string): boolean {
+export function hasMatchingButton(components: readonly unknown[],
+  matches: (customId: string, disabled: boolean) => boolean): boolean {
   return components.some(component => {
     if (!component || typeof component !== 'object') return false;
     if ('type' in component && component.type === ComponentType.Button
-      && 'custom_id' in component && component.custom_id === customId
-      && (!('disabled' in component) || component.disabled !== true)) return true;
+      && 'custom_id' in component && typeof component.custom_id === 'string') {
+      return matches(component.custom_id, 'disabled' in component && component.disabled === true);
+    }
     return 'components' in component && Array.isArray(component.components)
-      && hasEnabledButton(component.components, customId);
+      && hasMatchingButton(component.components, matches);
   });
+}
+
+export function hasEnabledButton(components: readonly unknown[], customId: string): boolean {
+  return hasMatchingButton(components, (id, disabled) => id === customId && !disabled);
 }
 
 interface VerificationContext {
@@ -81,7 +87,6 @@ const elevatedPermissions = [
   PermissionFlagsBits.ManageChannels,
   PermissionFlagsBits.ManageWebhooks,
   PermissionFlagsBits.ViewAuditLog,
-  PermissionFlagsBits.ViewGuildInsights,
   PermissionFlagsBits.ManageNicknames,
   PermissionFlagsBits.ManageEvents,
   PermissionFlagsBits.ManageGuildExpressions,
@@ -108,6 +113,9 @@ export function assertSafeMemberRole(role: {
   }
   if (elevatedPermissions.some(permission => role.permissions.has(permission))) {
     throw new SetupError(`The ${label} role must not grant administrative or moderation permissions.`);
+  }
+  if (role.permissions.has(PermissionFlagsBits.ViewGuildInsights)) {
+    throw new SetupError(`Remove View Server Insights from the ${label} role before using it for self-service role assignment.`);
   }
 }
 
