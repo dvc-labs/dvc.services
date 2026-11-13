@@ -6,14 +6,14 @@ import { CHERRY_MODAL_ID, CHERRY_REVIEW_PREFIX, type CherryCreek } from './cherr
 import type { Config } from './config.js';
 import { SetupError } from './errors.js';
 import { HallError, MAX_HALL_PROMPT, type HallCommands, type HallScope } from './hall.js';
-import { hallCards } from './hall-ui.js';
+import { hallCards, HALL_FORGET_PREFIX, parseHallForget } from './hall-ui.js';
 import { errorSummary, type Logger } from './logger.js';
 import { MemberLookupLimiter, MemberReportCache, memberCard, memberView, parseMemberDetails,
   parseMemberNavigation, type MemberReport } from './member.js';
-import { BULLETIN_CUSTOM_ID_PREFIX, BULLETIN_PANEL_BUTTON, BULLETIN_VERIFY_BUTTON, Cooldown,
+import { BULLETIN_CUSTOM_ID_PREFIX, BULLETIN_VERIFY_BUTTON, Cooldown, hasEnabledButton,
   isTrustedVerificationButton, isTrustedVerificationPanel, MEMBER_CUSTOM_ID_PREFIX, parseBulletinAction, VERIFY_CUSTOM_ID } from './policy.js';
-import type { VerificationPanels } from './panel.js';
-import { aboutCard, brandedTitle, bulletinCard, card } from './ui.js';
+import type { VerificationPanelResult } from './panel.js';
+import { aboutCard, brandedTitle, bulletinCard, card, verificationReceipt } from './ui.js';
 import type { VerificationResult, VerificationService } from './verification.js';
 
 export interface RouterDependencies {
@@ -21,8 +21,7 @@ export interface RouterDependencies {
   botId: () => string;
   isReady: () => boolean;
   panelId: () => string | undefined;
-  bulletinPanelId?: () => string | undefined;
-  refreshPanel: () => Promise<VerificationPanels>;
+  refreshPanel: () => Promise<VerificationPanelResult>;
   verification: () => VerificationService;
   // Absent or returning undefined when BULLETIN_ROLE_ID is not configured.
   bulletin?: () => BulletinService | undefined;
@@ -43,12 +42,13 @@ const verificationReplies: Record<Exclude<VerificationResult, 'awarded'>, [strin
   cooldown: ['Just a moment', 'Please wait a few seconds before trying again.'],
 };
 
-type ButtonRoute = 'verify' | 'member_page' | 'member_details' | 'bulletin' | 'cherry_review';
+type ButtonRoute = 'verify' | 'member_page' | 'member_details' | 'bulletin' | 'cherry_review' | 'hall_forget';
 
 function buttonRoute(customId: string): ButtonRoute | undefined {
   if (customId === VERIFY_CUSTOM_ID) return 'verify';
   if (customId.startsWith(BULLETIN_CUSTOM_ID_PREFIX)) return 'bulletin';
   if (customId.startsWith(CHERRY_REVIEW_PREFIX)) return 'cherry_review';
+  if (customId.startsWith(HALL_FORGET_PREFIX)) return 'hall_forget';
   if (parseMemberDetails(customId)) return 'member_details';
   return customId.startsWith(MEMBER_CUSTOM_ID_PREFIX) ? 'member_page' : undefined;
 }
@@ -95,6 +95,7 @@ export class InteractionRouter {
       else if (route === 'member_details') await this.memberDetails(interaction);
       else if (route === 'member_page') await this.memberPage(interaction);
       else if (route === 'bulletin') await this.bulletin(interaction);
+      else if (route === 'hall_forget') await this.forgetHall(interaction);
       else if (route === 'cherry_review') {
         const cherry = this.deps.cherry?.();
         if (cherry && this.deps.isReady()) await cherry.review(interaction, this.deps.botId());
@@ -144,8 +145,11 @@ export class InteractionRouter {
 
   private async respond(interaction: ChatInputCommandInteraction | ButtonInteraction,
     title: string, description: string): Promise<void> {
+    await this.sendResponse(interaction, card(title, description));
+  }
+
+  private async sendResponse(interaction: ChatInputCommandInteraction | ButtonInteraction, payload: ReturnType<typeof card>): Promise<void> {
     try {
-      const payload = card(title, description);
       if (interaction.deferred || interaction.replied) await interaction.editReply(payload);
       else await interaction.reply({ ...payload, flags: MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral });
     } catch (error) {
@@ -156,7 +160,7 @@ export class InteractionRouter {
   private async command(interaction: ChatInputCommandInteraction): Promise<void> {
     const { config, audit } = this.deps;
     const started = this.now();
-    let command = interaction.commandName;
+    const command = interaction.commandName;
     let outcome = 'error';
     let detail: string | undefined;
     let targetUserId: string | undefined;
@@ -221,14 +225,14 @@ export class InteractionRouter {
         } finally { permit.release(); }
       } else if (interaction.commandName === 'verification') {
         await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-        const panels = await this.deps.refreshPanel();
+        const panel = await this.deps.refreshPanel();
         audit.record({ event: 'verification_panel_updated', title: 'Verification panel ready',
-          outcome: panels.verification.created ? 'created' : 'updated', userId: interaction.user.id,
-          channelId: config.verificationChannelId, detail: `Message ID: ${panels.verification.id}`,
-          ...(panels.bulletin ? { fields: [{ name: 'Bulletin panel', value: panels.bulletin.id }] } : {}) });
+          outcome: panel.created ? 'created' : 'updated', userId: interaction.user.id,
+          channelId: config.verificationChannelId, detail: `Message ID: ${panel.id}`,
+          ...(panel.retiredBulletinCards ? { fields: [{ name: 'Old Bulletin cards removed', value: String(panel.retiredBulletinCards) }] } : {}) });
         outcome = 'success';
         await this.respond(interaction, 'Verification ready',
-          `The ${panels.bulletin ? 'verification and Bulletin cards are' : 'verification card is'} ready in <#${config.verificationChannelId}>.`);
+          `The verification panel is ready in <#${config.verificationChannelId}>.`);
       } else if (interaction.commandName === 'cherrycreek') {
         const cherry = this.deps.cherry?.();
         if (!cherry) {
@@ -238,9 +242,7 @@ export class InteractionRouter {
         }
         outcome = await cherry.open(interaction);
       } else if (interaction.commandName === 'ask') {
-        const action = interaction.options.getSubcommand();
-        command = `ask ${action}`;
-        outcome = await this.hallCommand(interaction, action);
+        outcome = await this.hallCommand(interaction);
       } else {
         outcome = 'unknown_command';
         await this.respond(interaction, 'Command unavailable', 'Please refresh Discord’s command list and try again.');
@@ -261,58 +263,79 @@ export class InteractionRouter {
     }
   }
 
-  private async hallCommand(interaction: ChatInputCommandInteraction, action: string): Promise<string> {
+  private async hallCommand(interaction: ChatInputCommandInteraction): Promise<string> {
     const { hall, config, logger } = this.deps;
     if (!hall) {
       await this.respond(interaction, 'hallAI unavailable', 'The Hall connection is not configured on this server.');
       return 'not_configured';
     }
-    if (action !== 'question' && action !== 'forget') {
-      await this.respond(interaction, 'Command unavailable', 'Use /ask question or /ask forget.');
-      return 'unknown_command';
-    }
-    const asking = action === 'question';
-    const prompt = asking ? interaction.options.getString('prompt', true).trim() : '';
-    if (asking && (!prompt || prompt.length > MAX_HALL_PROMPT)) {
+    const prompt = interaction.options.getString('prompt')?.trim() ?? '';
+    if (!prompt || prompt.length > MAX_HALL_PROMPT) {
       await this.respond(interaction, 'Question needed', `Enter a question of up to ${MAX_HALL_PROMPT.toLocaleString('en')} characters.`);
       return 'invalid_question';
     }
     const scope: HallScope = { guildId: config.guildId, channelId: interaction.channelId, userId: interaction.user.id,
       private: interaction.options.getBoolean('private') === true };
-    await interaction.deferReply(!asking || scope.private ? { flags: MessageFlags.Ephemeral } : {});
+    await interaction.deferReply(scope.private ? { flags: MessageFlags.Ephemeral } : {});
     try {
-      if (asking) {
-        const answer = await hall.ask(scope, prompt, interaction.options.getBoolean('reset') === true);
-        const [first, ...continuations] = hallCards(prompt, answer, config.emoji);
-        await interaction.editReply(first!);
-        try {
-          for (const page of continuations) {
-            await interaction.followUp({ ...page, flags: page.flags | (scope.private ? MessageFlags.Ephemeral : 0) });
-          }
-        } catch (error) {
-          // A failed continuation should never remove the answer already delivered.
-          logger.write('warn', 'hall_delivery_incomplete', { error: errorSummary(error) });
-          return 'partial_reply';
+      const answer = await hall.ask(scope, prompt, interaction.options.getBoolean('reset') === true);
+      const [first, ...continuations] = hallCards(prompt, answer, config.emoji, scope.userId, scope.private);
+      await interaction.editReply(first!);
+      try {
+        for (const page of continuations) {
+          await interaction.followUp({ ...page, flags: page.flags | (scope.private ? MessageFlags.Ephemeral : 0) });
         }
-      } else {
-        await hall.forget(scope);
-        await this.respond(interaction, 'Hall context cleared',
-          `Your ${scope.private ? 'private' : 'public'} conversation context for this channel was cleared. Existing Discord messages stay in place.`);
+      } catch (error) {
+        // A failed continuation should never remove the answer already delivered.
+        logger.write('warn', 'hall_delivery_incomplete', { error: errorSummary(error) });
+        return 'partial_reply';
       }
       return 'success';
     } catch (error) {
       if (!(error instanceof HallError)) throw error;
-      const message = {
-        busy: 'Hall is still working on other requests. Please try again in a moment.',
-        rate_limited: 'Please wait a little before using Hall again.',
-        access_denied: 'The Hall connection was refused. Let the dvc.labs team know so they can check the setup.',
-        unavailable: 'Hall could not complete this request. Please try again shortly.',
-      }[error.kind];
-      if (error.kind === 'access_denied' || error.kind === 'unavailable') {
-        logger.write('warn', 'hall_request_failed', { outcome: error.kind, status: error.status, reference: error.reference });
-      }
-      await this.failure(interaction, 'hallAI unavailable', message + (error.reference ? `\nReference: ${error.reference}` : ''));
+      await this.failure(interaction, 'hallAI unavailable', this.hallErrorMessage(error));
       return error.kind;
+    }
+  }
+
+  private hallErrorMessage(error: HallError): string {
+    const message = {
+      busy: 'Hall is still working on other requests. Please try again in a moment.',
+      rate_limited: 'Please wait a little before using Hall again.',
+      access_denied: 'The Hall connection was refused. Let the dvc.labs team know so they can check the setup.',
+      unavailable: 'Hall could not complete this request. Please try again shortly.',
+    }[error.kind];
+    if (error.kind === 'access_denied' || error.kind === 'unavailable') {
+      this.deps.logger.write('warn', 'hall_request_failed', { outcome: error.kind, status: error.status, reference: error.reference });
+    }
+    return message + (error.reference ? `\nReference: ${error.reference}` : '');
+  }
+
+  private async forgetHall(interaction: ButtonInteraction): Promise<void> {
+    const { config, hall, audit } = this.deps;
+    const target = parseHallForget(interaction.customId);
+    if (!hall || !this.deps.isReady() || !target || target.ownerId !== interaction.user.id
+      || interaction.guildId !== config.guildId || interaction.channelId !== config.commandsChannelId
+      || interaction.message.author.id !== this.deps.botId()
+      || target.private !== interaction.message.flags.has(MessageFlags.Ephemeral)
+      || !hasEnabledButton(interaction.message.components.map(component => component.toJSON()), interaction.customId)) {
+      await this.respond(interaction, 'Forget unavailable', 'Only the member who asked can clear the context from their /ask reply.');
+      return;
+    }
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    let outcome = 'error';
+    try {
+      await hall.forget({ guildId: config.guildId, channelId: interaction.channelId, userId: target.ownerId, private: target.private });
+      outcome = 'success';
+      await this.respond(interaction, 'Hall context cleared',
+        `Your ${target.private ? 'private' : 'public'} conversation context for this channel was cleared. Existing Discord messages stay in place.`);
+    } catch (error) {
+      if (!(error instanceof HallError)) throw error;
+      outcome = error.kind;
+      await this.respond(interaction, 'Context could not be cleared', this.hallErrorMessage(error));
+    } finally {
+      audit.record({ event: 'hall_context_reset', title: 'Hall context reset', outcome, userId: interaction.user.id,
+        channelId: interaction.channelId, discord: false });
     }
   }
 
@@ -453,21 +476,21 @@ export class InteractionRouter {
       ? [verifiedTitle, `Welcome to dvc.labs, ${userMention(interaction.user.id)}! Your ${roleMention(config.verificationRoleId)} role has been added and the community is now unlocked.`]
       : verificationReplies[result];
     // Reply failures cannot undo the role or produce a false verification-failure log.
-    await this.respond(interaction, title, description);
+    const offer = result === 'awarded' && this.deps.bulletin?.() ? config.bulletinRoleId : undefined;
+    await this.sendResponse(interaction, verificationReceipt(title, description, interaction.user.id, offer));
   }
 
   private async bulletin(interaction: ButtonInteraction): Promise<void> {
     const { config, audit } = this.deps;
     const service = this.deps.bulletin?.();
     const roleId = config.bulletinRoleId;
-    const onVerification = interaction.customId === BULLETIN_VERIFY_BUTTON;
-    const opening = onVerification || interaction.customId === BULLETIN_PANEL_BUTTON;
+    const opening = interaction.customId === BULLETIN_VERIFY_BUTTON;
     const action = parseBulletinAction(interaction.customId);
     const trustedPanel = opening && isTrustedVerificationPanel({
       guildId: interaction.guildId, channelId: interaction.channelId, authorId: interaction.message.author.id,
       messageId: interaction.message.id, customId: interaction.customId,
     }, { guildId: config.guildId, channelId: config.verificationChannelId, botId: this.deps.botId(),
-      messageId: onVerification ? this.deps.panelId() : this.deps.bulletinPanelId?.() });
+      messageId: this.deps.panelId() });
     const trustedAction = action?.userId === interaction.user.id && action.roleId === roleId
       && interaction.message.flags.has(MessageFlags.Ephemeral);
     if (!service || !roleId || !this.deps.isReady() || interaction.guildId !== config.guildId
@@ -477,7 +500,7 @@ export class InteractionRouter {
         audit.record({ event: 'bulletin_denied', title: 'Bulletin request not accepted',
           outcome: 'not_ready_or_invalid_message', userId: interaction.user.id, channelId: interaction.channelId, discord: false });
       }
-      await this.respond(interaction, 'Bulletin unavailable', `Open Bulletin preferences from a current card in <#${config.verificationChannelId}>.`);
+      await this.respond(interaction, 'Bulletin unavailable', `Open Bulletin preferences on the verification panel in <#${config.verificationChannelId}>.`);
       return;
     }
     if (opening) {
@@ -493,8 +516,13 @@ export class InteractionRouter {
     if (!action) return;
     // Edit the private card in place so the button always offers the next action.
     await interaction.deferUpdate();
+    if (action.action === 'skip') {
+      await this.respond(interaction, 'You’re verified',
+        `Your Bulletin settings haven’t changed. To change them later, tap **Bulletin preferences** in <#${config.verificationChannelId}>.`);
+      return;
+    }
     let result: BulletinResult;
-    try { result = await service.set(interaction.user.id, action.subscribe); }
+    try { result = await service.set(interaction.user.id, action.action === 'join'); }
     catch (error) {
       audit.record({ event: 'bulletin_failed', title: 'Bulletin update failed', outcome: 'error',
         userId: interaction.user.id, channelId: interaction.channelId, roleId, priority: 'critical',

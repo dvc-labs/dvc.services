@@ -1,3 +1,4 @@
+import { resolve } from 'node:path';
 import { SetupError } from './errors.js';
 import { DVC_EMOJI } from './version.js';
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
@@ -12,10 +13,12 @@ export interface Config {
   readonly commandsChannelId: string;
   readonly logsChannelId: string;
   readonly verificationMessageId: string | undefined;
-  // Optional self-service news-ping role managed on the verification channel cards.
+  // Optional self-service news pings managed through the verification panel.
   readonly bulletinRoleId: string | undefined;
   readonly modChannelId: string | undefined;
   readonly minecraftChannelId: string | undefined;
+  readonly minecrafterRoleId: string | undefined;
+  readonly dataDir: string;
   readonly hallWorkerUrl: string | undefined;
   readonly hallApiKey: string | undefined;
   readonly port: number;
@@ -75,6 +78,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     bulletinRoleId: env.BULLETIN_ROLE_ID?.trim() ? snowflake(env, 'BULLETIN_ROLE_ID') : undefined,
     modChannelId: env.MOD_CHANNEL_ID?.trim() ? snowflake(env, 'MOD_CHANNEL_ID') : undefined,
     minecraftChannelId: env.MINECRAFT_CHANNEL_ID?.trim() ? snowflake(env, 'MINECRAFT_CHANNEL_ID') : undefined,
+    minecrafterRoleId: env.MINECRAFTER_ROLE_ID?.trim() ? snowflake(env, 'MINECRAFTER_ROLE_ID') : undefined,
+    dataDir: resolve(env.DATA_DIR?.trim() || 'data'),
     hallWorkerUrl: workerOrigin(env.WORKER_URL?.trim()),
     hallApiKey: env.HALLAI_API_KEY?.trim() || undefined,
     port,
@@ -90,6 +95,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   }
   if (config.adminRoleId && [config.guildId, config.verificationRoleId, config.bulletinRoleId].includes(config.adminRoleId)) {
     throw new SetupError('ADMIN_ROLE_ID must be its own role, not @everyone, VERIFICATION_ROLE_ID, or BULLETIN_ROLE_ID.');
+  }
+  if (config.minecrafterRoleId && [config.guildId, config.verificationRoleId, config.adminRoleId, config.bulletinRoleId].includes(config.minecrafterRoleId)) {
+    throw new SetupError('MINECRAFTER_ROLE_ID must be a separate role from @everyone, verification, Bulletin, and admin.');
   }
   if (new Set([config.verificationChannelId, config.commandsChannelId, config.logsChannelId]).size !== 3) {
     throw new SetupError('Use separate verification, commands, and private logs channels.');

@@ -2,15 +2,16 @@ import { ChannelType, PermissionFlagsBits, type Client, type Guild,
   type Message, type TextChannel } from 'discord.js';
 import type { Config } from './config.js';
 import { SetupError } from './errors.js';
-import type { PanelKind, PanelMessage, PanelRepository } from './panel.js';
+import type { PanelMessage, PanelRepository } from './panel.js';
 import type { BulletinGateway } from './bulletin.js';
 import { assertSafeMemberRole, BULLETIN_JOIN_REASON, BULLETIN_LEAVE_REASON, BULLETIN_PANEL_BUTTON, hasEnabledButton, hasMatchingButton,
-  serverAccessRole, VERIFICATION_AUDIT_REASON, VERIFY_CUSTOM_ID, type AccessRoles } from './policy.js';
-import { bulletinPanel, verificationPanel } from './ui.js';
+  MINECRAFTER_ROLE_REASON, serverAccessRole, VERIFICATION_AUDIT_REASON, VERIFY_CUSTOM_ID, type AccessRoles } from './policy.js';
+import { verificationPanel } from './ui.js';
+import type { MinecrafterGateway } from './cherry-creek.js';
 import type { VerificationGateway } from './verification.js';
 
 // Shared by every role the bot hands out: it exists, is safe to self-assign, and sits below the bot.
-async function assertRoleAssignable(guild: Guild, roleId: string, envName: string, label: string): Promise<void> {
+async function assertRoleAssignable(guild: Guild, roleId: string, envName: string, label: string) {
   const role = await guild.roles.fetch(roleId, { force: true });
   if (!role) throw new SetupError(`${envName} does not exist in GUILD_ID.`);
   assertSafeMemberRole(role, guild.id, label);
@@ -21,6 +22,7 @@ async function assertRoleAssignable(guild: Guild, roleId: string, envName: strin
   if (me.roles.highest.comparePositionTo(role) <= 0) {
     throw new SetupError(`Move the dvc.services bot role above the ${label} role.`);
   }
+  return role;
 }
 
 export class DiscordVerificationGateway implements VerificationGateway {
@@ -33,8 +35,8 @@ export class DiscordVerificationGateway implements VerificationGateway {
       pending: member.pending ?? false, bot: member.user.bot };
   }
 
-  assertRoleAssignable(): Promise<void> {
-    return assertRoleAssignable(this.guild, this.config.verificationRoleId, 'VERIFICATION_ROLE_ID', 'verification');
+  async assertRoleAssignable(): Promise<void> {
+    await assertRoleAssignable(this.guild, this.config.verificationRoleId, 'VERIFICATION_ROLE_ID', 'verification');
   }
 
   async addRole(userId: string): Promise<void> {
@@ -57,8 +59,8 @@ export class DiscordBulletinGateway implements BulletinGateway {
       subscribed: member.roles.cache.has(this.roleId), bot: member.user.bot };
   }
 
-  assertRoleAssignable(): Promise<void> {
-    return assertRoleAssignable(this.guild, this.roleId, 'BULLETIN_ROLE_ID', 'Bulletin');
+  async assertRoleAssignable(): Promise<void> {
+    await assertRoleAssignable(this.guild, this.roleId, 'BULLETIN_ROLE_ID', 'Bulletin');
   }
 
   async setRole(userId: string, subscribed: boolean): Promise<void> {
@@ -67,6 +69,28 @@ export class DiscordBulletinGateway implements BulletinGateway {
       reason: subscribed ? BULLETIN_JOIN_REASON : BULLETIN_LEAVE_REASON };
     if (subscribed) await this.guild.members.addRole(options);
     else await this.guild.members.removeRole(options);
+  }
+}
+
+export class DiscordMinecrafterGateway implements MinecrafterGateway {
+  constructor(private readonly guild: Guild, private readonly config: AccessRoles, readonly roleId: string,
+    private readonly moderationChannel: TextChannel) {}
+
+  async assertRoleAssignable(): Promise<void> {
+    const role = await assertRoleAssignable(this.guild, this.roleId, 'MINECRAFTER_ROLE_ID', 'Minecrafter');
+    if (this.moderationChannel.permissionsFor(role).has(PermissionFlagsBits.ViewChannel)) {
+      throw new SetupError('Keep MOD_CHANNEL_ID private: remove View Channel from the Minecrafter role.');
+    }
+  }
+
+  async award(userId: string): Promise<void> {
+    const member = await this.guild.members.fetch({ user: userId, force: true, cache: false });
+    if (member.user.bot || member.pending || !serverAccessRole(member.roles.cache, this.config)) {
+      throw new SetupError('The applicant must still have access to dvc.labs before receiving the Minecrafter role.');
+    }
+    await this.assertRoleAssignable();
+    if (member.roles.cache.has(this.roleId)) return;
+    await this.guild.members.addRole({ user: userId, role: this.roleId, reason: MINECRAFTER_ROLE_REASON });
   }
 }
 
@@ -81,8 +105,7 @@ function panelMessage(message: Message): PanelMessage {
 }
 
 export function discordPanelRepository(channel: TextChannel, config: Pick<Config, 'emoji' | 'bulletinRoleId'>): PanelRepository {
-  const payload = (kind: PanelKind) => kind === 'verification'
-    ? verificationPanel(config.emoji, !!config.bulletinRoleId) : bulletinPanel(config.emoji, config.bulletinRoleId);
+  const payload = () => verificationPanel(config.emoji, !!config.bulletinRoleId);
   return {
     async get(id) {
       try { return panelMessage(await channel.messages.fetch({ message: id, cache: false, force: true })); }
@@ -95,11 +118,17 @@ export function discordPanelRepository(channel: TextChannel, config: Pick<Config
       const messages = await channel.messages.fetch({ limit: 100, ...(before ? { before } : {}), cache: false });
       return [...messages.values()].map(panelMessage);
     },
-    async update(id, kind) {
+    async update(id) {
       // Discord requires clearing legacy fields when converting an existing panel to V2.
-      await channel.messages.edit(id, { ...payload(kind), content: null, embeds: [] });
+      await channel.messages.edit(id, { ...payload(), content: null, embeds: [] });
     },
-    async create(kind) { return (await channel.send(payload(kind))).id; },
+    async create() { return (await channel.send(payload())).id; },
+    async retireBulletin(id) {
+      try { await channel.messages.delete(id); }
+      catch (error) {
+        if (!error || typeof error !== 'object' || !('code' in error) || error.code !== 10008) throw error;
+      }
+    },
   };
 }
 

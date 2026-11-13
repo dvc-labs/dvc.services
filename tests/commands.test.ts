@@ -30,14 +30,17 @@ test('command sync ignores command ordering and skips unchanged definitions', as
   assert.deepEqual(f.writes, []);
 });
 
-test('the registered set replaces the old Hall and Bulletin commands with /ask subcommands and /cherrycreek', () => {
+test('the registered set includes a single /ask prompt and no standalone Bulletin or forget command', () => {
   const definitions = commands.map(command => command.toJSON());
   assert.ok(definitions.some(command => command.name === 'cherrycreek'));
   assert.ok(!definitions.some(command => command.name === 'bulletin' || command.name === 'forget'));
   const ask = definitions.find(command => command.name === 'ask')!;
   assert.deepEqual(ask.options?.map(option => [option.type, option.name]), [
-    [ApplicationCommandOptionType.Subcommand, 'question'], [ApplicationCommandOptionType.Subcommand, 'forget'],
+    [ApplicationCommandOptionType.String, 'prompt'],
+    [ApplicationCommandOptionType.Boolean, 'private'],
+    [ApplicationCommandOptionType.Boolean, 'reset'],
   ]);
+  assert.ok(ask.options?.[0]?.required);
 });
 
 test('command sync updates changed permissions, descriptions, types, and missing or extra commands', async () => {

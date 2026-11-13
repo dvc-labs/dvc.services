@@ -8,6 +8,7 @@ import type { Config } from './config.js';
 import { SetupError } from './errors.js';
 import { errorSummary } from './logger.js';
 import { Cooldown, hasEnabledButton, hasMatchingButton, serverAccessRole } from './policy.js';
+import type { CherryApproval, CherryApprovalStore } from './state.js';
 import { card, discordTime } from './ui.js';
 
 export const CHERRY_MODAL_ID = 'dvc:cherry:v1:request';
@@ -21,6 +22,7 @@ const HISTORY_PAGE_SIZE = 100;
 const HISTORY_CHECK_BUDGET_MS = 20_000;
 
 interface CherryRequest { applicantId: string; username: string }
+export interface MinecrafterGateway { readonly roleId: string; award(userId: string): Promise<void> }
 type Decision = 'accepted' | 'declined';
 type Review = { decision: Decision; moderatorId: string; at: number; notification?: string };
 type CherryInteraction = ChatInputCommandInteraction | ModalSubmitInteraction | ButtonInteraction;
@@ -79,7 +81,8 @@ export class CherryCreek {
   private readonly reviewing = new Set<string>();
 
   constructor(private readonly config: Config, private readonly mod: TextChannel, private readonly minecraft: TextChannel,
-    private readonly audit: AuditLog, private readonly now = Date.now) {
+    private readonly audit: AuditLog, private readonly approvals: CherryApprovalStore,
+    private readonly minecrafter: MinecrafterGateway, private readonly now = Date.now) {
     this.submissionCooldown = new Cooldown(60_000, now);
   }
 
@@ -212,7 +215,50 @@ export class CherryCreek {
         await this.reply(interaction, 'Request already closed', 'This request was already reviewed or removed.');
         return;
       }
-      const review: Review = { decision: action.decision, moderatorId: interaction.user.id, at: this.now(),
+      const key = { guildId: this.config.guildId, requestId: messageId };
+      let approval: CherryApproval | undefined;
+      try {
+        const existing = this.approvals.get(key);
+        if (existing && (existing.applicantId !== action.applicantId || existing.roleId !== this.minecrafter.roleId)) {
+          await this.reply(interaction, 'Approval requires staff attention',
+            'The saved approval no longer matches this card or the configured Minecrafter role. Ask the server owner to reconcile it.');
+          return;
+        }
+        if (existing?.announcementId) {
+          await this.reply(interaction, 'Request already accepted', 'This approval and its Minecraft announcement were already saved.');
+          return;
+        }
+        if (action.decision === 'declined' && existing) {
+          await this.reply(interaction, 'Approval already started',
+            'Use Accept to finish the saved approval. If the request should not be accepted, ask the server owner to reconcile the role and Paper whitelist.');
+          return;
+        }
+        if (action.decision === 'accepted') {
+          approval = existing ?? { ...key, applicantId: action.applicantId, moderatorId: interaction.user.id,
+            roleId: this.minecrafter.roleId, approvedAt: this.now() };
+          if (!existing) this.approvals.begin(approval);
+          try { await this.minecrafter.award(approval.applicantId); }
+          catch (error) {
+            this.audit.record({ event: 'cherry_role_failed', title: 'Minecrafter role could not be confirmed',
+              outcome: 'role_unconfirmed', actorId: interaction.user.id, targetUserId: action.applicantId, roleId: approval.roleId,
+              channelId: this.mod.id, priority: 'critical',
+              detail: error instanceof SetupError ? error.message : errorSummary(error), fields: [this.requestLink(messageId)] });
+            await this.reply(interaction, 'Minecrafter role not confirmed',
+              'No announcement was sent. Check the applicant’s membership and the bot’s role permissions, then click Accept again.');
+            return;
+          }
+          this.approvals.confirmRole(key);
+        }
+      } catch (error) {
+        this.audit.record({ event: 'cherry_approval_storage_failed', title: 'Cherry Creek approval could not be saved',
+          outcome: 'storage_unconfirmed', actorId: interaction.user.id, targetUserId: action.applicantId,
+          channelId: this.mod.id, priority: 'critical', detail: errorSummary(error), fields: [this.requestLink(messageId)] });
+        await this.reply(interaction, 'Approval save not confirmed',
+          'No announcement was sent. Ask the server owner to check the bot’s storage before trying again.');
+        return;
+      }
+      const review: Review = { decision: action.decision, moderatorId: approval?.moderatorId ?? interaction.user.id,
+        at: approval?.approvedAt ?? this.now(),
         ...(action.decision === 'accepted' ? { notification: 'Delivery not confirmed yet. Check the Minecraft channel before notifying manually.' } : {}) };
       // Save the final decision to Discord and remove both buttons before an outbound ping.
       // A restart or a later click cannot reopen an accepted request.
@@ -226,6 +272,7 @@ export class CherryCreek {
       }
       this.audit.record({ event: 'cherry_request_reviewed', title: 'Cherry Creek request reviewed', outcome: review.decision,
         actorId: review.moderatorId, targetUserId: action.applicantId, channelId: this.mod.id,
+        ...(approval ? { roleId: approval.roleId } : {}),
         fields: [this.requestLink(messageId)], priority: 'important' });
       if (review.decision === 'declined') {
         await this.reply(interaction, 'Request declined', 'The moderation card has been updated.');
@@ -246,6 +293,12 @@ export class CherryCreek {
         return;
       }
       const link = '[View approval](https://discord.com/channels/' + this.config.guildId + '/' + this.minecraft.id + '/' + announcementId + ')';
+      try { this.approvals.recordNotice(key, announcementId); }
+      catch (error) {
+        this.audit.record({ event: 'cherry_notice_record_failed', title: 'Cherry Creek notice record could not be saved',
+          outcome: 'error', channelId: this.minecraft.id, fields: [this.requestLink(messageId), { name: 'Announcement', value: link }],
+          priority: 'critical', detail: errorSummary(error) });
+      }
       try { await this.mod.messages.edit(messageId, requestCard(action, { ...review, notification: link })); }
       catch (error) {
         this.audit.record({ event: 'cherry_receipt_failed', title: 'Cherry Creek receipt could not be updated', outcome: 'error',
@@ -255,7 +308,7 @@ export class CherryCreek {
       this.audit.record({ event: 'cherry_notice_sent', title: 'Cherry Creek applicant notified', outcome: 'sent',
         actorId: review.moderatorId, targetUserId: action.applicantId, channelId: this.minecraft.id,
         fields: [this.requestLink(messageId), { name: 'Announcement', value: link }], priority: 'important' });
-      await this.reply(interaction, 'Request accepted', 'The applicant was notified in the Minecraft channel. ' + link);
+      await this.reply(interaction, 'Request accepted', 'The Minecrafter role is set and the applicant was notified in the Minecraft channel. ' + link);
     } finally { this.reviewing.delete(messageId); }
   }
 

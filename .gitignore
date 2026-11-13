@@ -50,6 +50,9 @@ pnpm-debug.log*
 *.seed
 *.sqlite
 *.sqlite3
+*.sqlite-shm
+*.sqlite-wal
+*.sqlite-journal
 *.db
 *.db-shm
 *.db-wal

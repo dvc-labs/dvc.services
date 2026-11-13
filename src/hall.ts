@@ -63,18 +63,20 @@ function referenceId(value: unknown): string | undefined {
 export class HallClient implements HallCommands {
   private readonly active = new Set<string>();
   private readonly cooldown: Cooldown;
+  private readonly resetCooldown: Cooldown;
   private readonly stopped = new AbortController();
 
   constructor(private readonly origin: string, private readonly apiKey: string,
     private readonly request: typeof fetch = fetch, now: () => number = Date.now) {
     this.cooldown = new Cooldown(12_000, now);
+    this.resetCooldown = new Cooldown(12_000, now);
   }
 
   close(): void { this.stopped.abort(); }
 
   async ask(scope: HallScope, prompt: string, reset: boolean): Promise<HallReply> {
     if (!prompt.trim() || prompt.length > MAX_HALL_PROMPT) throw new HallError('unavailable');
-    return this.run(scope, async (identity, signal) => {
+    return this.run(scope, this.cooldown, async (identity, signal) => {
       if (reset) await this.reset(identity, signal);
       const data = await this.send('/api/chat', { ...identity, prompt, request_id: randomUUID() }, signal);
       if (typeof data.reply !== 'string' || !data.reply.trim() || data.reply.length > MAX_REPLY || data.memory !== 'session') {
@@ -88,13 +90,13 @@ export class HallClient implements HallCommands {
   }
 
   forget(scope: HallScope): Promise<void> {
-    return this.run(scope, (identity, signal) => this.reset(identity, signal));
+    return this.run(scope, this.resetCooldown, (identity, signal) => this.reset(identity, signal));
   }
 
-  private async run<T>(scope: HallScope, action: (identity: Record<string, string>, signal: AbortSignal) => Promise<T>): Promise<T> {
+  private async run<T>(scope: HallScope, cooldown: Cooldown, action: (identity: Record<string, string>, signal: AbortSignal) => Promise<T>): Promise<T> {
     if (this.stopped.signal.aborted) throw new HallError('unavailable');
     if (this.active.has(scope.userId) || this.active.size >= 2) throw new HallError('busy');
-    if (!this.cooldown.take(scope.userId)) throw new HallError('rate_limited');
+    if (!cooldown.take(scope.userId)) throw new HallError('rate_limited');
     this.active.add(scope.userId);
     try {
       const signal = AbortSignal.any([this.stopped.signal, AbortSignal.timeout(TIMEOUT_MS)]);

@@ -6,14 +6,15 @@ import { CherryCreek } from './cherry-creek.js';
 import { syncCommands } from './commands.js';
 import { clientOptions, intentFailureHint } from './client-options.js';
 import { loadConfig, type Config } from './config.js';
-import { discordPanelRepository, preflight } from './discord.js';
+import { DiscordMinecrafterGateway, discordPanelRepository, preflight } from './discord.js';
 import { SetupError } from './errors.js';
 import { HallClient } from './hall.js';
 import { createHealthServer } from './health.js';
 import { errorSummary, Logger } from './logger.js';
 import { loadMemberReport } from './member.js';
-import { ensureVerificationPanels, type VerificationPanels } from './panel.js';
+import { ensureVerificationPanel, type VerificationPanelResult } from './panel.js';
 import { InteractionRouter } from './router.js';
+import { BotState } from './state.js';
 import { VerificationService } from './verification.js';
 import { VERSION } from './version.js';
 
@@ -39,11 +40,11 @@ const client = new Client({
 let operational = false;
 let stopping = false;
 let currentPanelId: string | undefined;
-let currentBulletinPanelId: string | undefined;
+let state: BotState | undefined;
 let verification: VerificationService | undefined;
 let bulletin: BulletinService | undefined;
 let cherry: CherryCreek | undefined;
-let refreshPanel: (() => Promise<VerificationPanels>) | undefined;
+let refreshPanel: (() => Promise<VerificationPanelResult>) | undefined;
 const activity = new GuildActivity({ config, audit, isReady: () => operational && !stopping });
 const health = createHealthServer(() => operational && !stopping && client.isReady());
 
@@ -59,6 +60,7 @@ async function shutdown(reason: string, code: number): Promise<void> {
   try { await activity.flush(); await audit.flush(); }
   finally {
     await client.destroy();
+    state?.close();
     health.closeAllConnections();
     if (health.listening) await new Promise<void>(resolve => health.close(() => resolve()));
     clearTimeout(forcedExit);
@@ -74,24 +76,56 @@ async function initialise(readyClient: Client<true>): Promise<void> {
 
   verification = new VerificationService(resources.gateway);
   if (resources.bulletinGateway) bulletin = new BulletinService(resources.bulletinGateway);
-  if (resources.cherryChannels) cherry = new CherryCreek(config, resources.cherryChannels.mod, resources.cherryChannels.minecraft, audit);
+  const marker = 'single_verification_panel:' + config.applicationId + ':' + config.verificationChannelId;
+  let bulletinRetired = false;
+  try {
+    state = new BotState(config.dataDir);
+    bulletinRetired = state.hasMarker(marker);
+  }
+  catch (error) {
+    try { state?.close(); } catch { /* Keep the storage error useful. */ }
+    state = undefined;
+    audit.record({ event: 'bot_storage_unavailable', title: 'Bot storage unavailable', outcome: 'error',
+      detail: error instanceof SetupError ? error.message : 'Could not read bot state. Check the database in DATA_DIR.',
+      priority: 'critical' });
+  }
+  if (resources.cherryChannels) {
+    if (!config.minecrafterRoleId) {
+      audit.record({ event: 'cherry_setup_incomplete', title: 'Cherry Creek setup incomplete', outcome: 'disabled',
+        detail: 'Set MINECRAFTER_ROLE_ID to the Minecrafter role, then restart.' });
+    } else if (state) {
+      const { mod, minecraft } = resources.cherryChannels;
+      const role = new DiscordMinecrafterGateway(resources.guild, config, config.minecrafterRoleId, mod);
+      try {
+        await role.assertRoleAssignable();
+        cherry = new CherryCreek(config, mod, minecraft, audit, state, role);
+      } catch (error) {
+        audit.record({ event: 'cherry_setup_incomplete', title: 'Cherry Creek setup incomplete', outcome: 'disabled',
+          detail: error instanceof SetupError ? error.message : errorSummary(error), priority: 'critical' });
+      }
+    }
+  }
   const repository = discordPanelRepository(resources.verificationChannel, config);
-  let panelTask: Promise<VerificationPanels> | undefined;
+  let panelTask: Promise<VerificationPanelResult> | undefined;
   refreshPanel = () => {
-    panelTask ??= ensureVerificationPanels(repository, readyClient.user.id, !!bulletin, config.verificationMessageId)
-      .then(panels => {
-        currentPanelId = panels.verification.id;
-        currentBulletinPanelId = panels.bulletin?.id;
-        return panels;
+    panelTask ??= ensureVerificationPanel(repository, readyClient.user.id, config.verificationMessageId, !bulletinRetired)
+      .then(panel => {
+        currentPanelId = panel.id;
+        if (!bulletinRetired) {
+          bulletinRetired = true;
+          try { state?.mark(marker); }
+          catch (error) { logger.write('warn', 'panel_migration_record_failed', { error: errorSummary(error) }); }
+        }
+        return panel;
       })
       .finally(() => { panelTask = undefined; });
     return panelTask;
   };
-  const panels = await refreshPanel();
+  const panel = await refreshPanel();
   audit.record({ event: 'verification_panel_ready', title: 'Verification panel ready',
-    outcome: panels.verification.created ? 'created' : 'reused', channelId: config.verificationChannelId,
-    detail: `Message ID: ${panels.verification.id}`,
-    ...(panels.bulletin ? { fields: [{ name: 'Bulletin panel', value: panels.bulletin.id }] } : {}) });
+    outcome: panel.created ? 'created' : 'reused', channelId: config.verificationChannelId,
+    detail: `Message ID: ${panel.id}`,
+    ...(panel.retiredBulletinCards ? { fields: [{ name: 'Old Bulletin cards removed', value: String(panel.retiredBulletinCards) }] } : {}) });
   if (stopping) return;
   operational = true;
   audit.record({ event: 'bot_online', title: 'dvc.services online', outcome: 'ready', priority: 'critical',
@@ -110,7 +144,6 @@ const router = new InteractionRouter({
   botId: () => client.user?.id ?? '',
   isReady: () => operational && !stopping && client.isReady(),
   panelId: () => currentPanelId,
-  bulletinPanelId: () => currentBulletinPanelId,
   memberReport: async userId => {
     const guild = client.guilds.cache.get(config.guildId);
     if (!guild) throw new SetupError('The configured server is not available.');
