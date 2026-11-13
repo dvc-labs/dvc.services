@@ -1,5 +1,5 @@
-import { ChannelType, PermissionFlagsBits, type Client, type Guild,
-  type Message, type TextChannel } from 'discord.js';
+import { ChannelType, PermissionFlagsBits, RESTJSONErrorCodes, Routes,
+  type Client, type Guild, type Message, type RESTGetAPIGuildMemberResult, type TextChannel } from 'discord.js';
 import type { Config } from './config.js';
 import { SetupError } from './errors.js';
 import type { PanelMessage, PanelRepository } from './panel.js';
@@ -83,14 +83,30 @@ export class DiscordMinecrafterGateway implements MinecrafterGateway {
     }
   }
 
-  async award(userId: string): Promise<void> {
-    const member = await this.guild.members.fetch({ user: userId, force: true, cache: false });
-    if (member.user.bot || member.pending || !serverAccessRole(member.roles.cache, this.config)) {
+  private async readMember(userId: string): Promise<RESTGetAPIGuildMemberResult | null> {
+    // Read the role IDs from Discord, including roles that aren't in discord.js's cache.
+    try {
+      return await this.guild.client.rest.get(Routes.guildMember(this.guild.id, userId)) as RESTGetAPIGuildMemberResult;
+    } catch (error) {
+      if (error && typeof error === 'object' && 'code' in error && error.code === RESTJSONErrorCodes.UnknownMember) return null;
+      throw error;
+    }
+  }
+
+  async prepareAward(userId: string): Promise<() => Promise<void>> {
+    await this.assertRoleAssignable();
+    const member = await this.readMember(userId);
+    if (!member || member.user.bot || member.pending || !serverAccessRole(new Set(member.roles), this.config)) {
       throw new SetupError('The applicant must still have access to dvc.labs before receiving the Minecrafter role.');
     }
-    await this.assertRoleAssignable();
-    if (member.roles.cache.has(this.roleId)) return;
-    await this.guild.members.addRole({ user: userId, role: this.roleId, reason: MINECRAFTER_ROLE_REASON });
+    return async () => {
+      if (member.roles.includes(this.roleId)) return;
+      await this.guild.members.addRole({ user: userId, role: this.roleId, reason: MINECRAFTER_ROLE_REASON });
+    };
+  }
+
+  async hasRole(userId: string, roleId: string): Promise<boolean> {
+    return (await this.readMember(userId))?.roles.includes(roleId) ?? false;
   }
 }
 

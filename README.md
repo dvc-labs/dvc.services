@@ -10,7 +10,7 @@ The Discord service bot for **dvc.labs** — a home for dvc. projects, experimen
 ## v0.2.4
 
 - One public verification panel. Newly verified members can choose **Yes** or **No** for announcement bulletins in their private confirmation, and change their choice later with **Bulletin preferences** on the panel. The bot removes its old standalone Bulletin card on upgrade.
-- `/ask prompt:…` opens a Hall conversation from a single command. Every Components V2 answer and continuation has an owner-only **Forget** button. The [CityMart Services](https://github.com/dvc-labs/CityMart-Services) integration keeps public and private conversation context separate.
+- `/ask prompt:…` opens a Hall conversation from a single command. Every Components V2 answer and continuation has an owner-only **Forget** button. With no answer card, use `/ask reset:true` without a prompt. The [CityMart Services](https://github.com/dvc-labs/CityMart-Services) integration keeps public and private conversation context separate.
 - Accepting a `/cherrycreek` request grants **Minecrafter** before sending the approval ping. A small SQLite database on persistent storage records approvals across restarts.
 - Logs show command timing, whitelist submission and decision outcomes, and changes to the Discord server's boost count and level.
 
@@ -40,7 +40,8 @@ The bot registers its own **guild commands** on startup, updating them only when
 | --- | --- | --- | --- |
 | **Verify** button | Human server members | Current panel in `VERIFICATION_CHANNEL_ID` | Grants the access role and offers a private Bulletin choice if configured |
 | **Bulletin preferences** button | Human server members | Current verification panel | Opens private subscription controls when `BULLETIN_ROLE_ID` is set |
-| `/ask prompt [private] [reset]` | Members with access to application commands | `COMMANDS_CHANNEL_ID` | Question and Hall's answer on V2 cards; public by default |
+| `/ask prompt:… [private] [reset]` | Members with access to application commands | `COMMANDS_CHANNEL_ID` | Question and Hall's answer on V2 cards; public by default |
+| `/ask reset:true [private]` (omit the prompt) | Members with access to application commands | `COMMANDS_CHANNEL_ID` | Clears Hall context without asking a new question; confirms privately |
 | **Forget** button | Original requester | Each `/ask` answer card | Clears the requester's Hall context for this channel and reply mode; confirms privately |
 | `/cherrycreek` | Verified members or holders of `ADMIN_ROLE_ID` | Minecraft or commands channel | Opens a Minecraft Java whitelist form, submitted privately to staff |
 | `/about` | Members with access to application commands | `COMMANDS_CHANNEL_ID` | Public information card |
@@ -114,11 +115,13 @@ Use separate standard text channels. Allow the bot to view, send, read history, 
 
 1. A verified member runs `/cherrycreek` and submits their Java username. The bot validates the name, sends the request to staff, and confirms submission privately.
 2. Staff with **Manage Server** or **Moderate Members** can review it. To approve, run the card's `whitelist add <username>` command in the Paper console and wait for confirmation, then click **Accept**. This bot does not connect to Paper.
-3. **Accept** saves the approval, grants the applicant Minecrafter, closes the staff card, and posts one approval mentioning only the applicant. It includes the Java address `play.cherrycreek.app` and a [Cherry Creek website](https://cherrycreek.app/) link. **Decline** closes the request without awarding a role or posting publicly. Previous approvals are unaffected.
+3. **Accept** checks that the applicant still has server access and that the bot can assign Minecrafter. It then saves the approval, grants Minecrafter, closes the staff card, and posts one approval mentioning only the applicant. It includes the Java address `play.cherrycreek.app` and a [Cherry Creek website](https://cherrycreek.app/) link. **Decline** closes the request without awarding a role or posting publicly. Previous approvals are unaffected.
 
 Each Discord member can have one pending request at a time. The bot checks its open moderation cards in Discord history before posting, so the limit survives restarts and still applies when a member enters a different Java username. It keeps a short cooldown to limit repeated checks. If the bot cannot finish checking history, it asks the member to try again without posting another card. Once a request is closed, the member can submit again after the cooldown.
 
-If the role grant fails, the staff card stays open and no announcement is sent. Fix the member or role permissions and click **Accept** again to finish the saved approval. Once acceptance has started, ask the server owner to reconcile Paper and Discord before reversing the decision. If an approval notice cannot be confirmed after the card is closed, check the Minecraft channel before notifying manually. The Java username stays on the private moderation message. Leave both channel variables blank to disable requests. A missing Minecrafter role setting or unavailable storage disables Cherry Creek with an operator warning; other features remain available.
+If the role grant fails, the staff card stays open and no announcement is sent. Fix the problem and click **Accept** to retry, or **Decline** to close the request if no grant was confirmed and Discord shows the applicant does not hold the saved role. If the applicant was already whitelisted in Paper and the request is declined, undo the whitelist change in Paper separately. The bot preserves confirmed approvals. If an approval notice cannot be confirmed after closing the card, check the Minecraft channel before notifying manually.
+
+The Java username stays on the private moderation message. Leave both channel variables blank to disable requests. A missing Minecrafter role setting or unavailable storage disables Cherry Creek with an operator warning in the console and logs channel; other features remain available.
 
 ## Persistent storage
 
@@ -133,7 +136,9 @@ Keep the state directory private, back up the whole directory with the bot stopp
 
 Set `WORKER_URL` and `HALLAI_API_KEY` for the Hall Worker in the bot's **runtime** environment. The Worker keeps its `OPENAI_API_KEY`; dvc.services only needs the matching Discord integration secret. Both settings are needed for `/ask`. Leave both empty to disable Hall while keeping the rest of the bot available. A missing half of the configuration produces an operator warning without revealing credentials.
 
-Try `/ask prompt:What is dvc.labs?` in the commands channel. Set `private:true` to make the question, answer and continuation cards visible only to you in Discord. Ask follow-up questions in the same reply mode. Use **Forget** on any of your answer cards to clear the current context for that channel and visibility, or use `reset:true` to start fresh before asking. Existing Discord messages remain visible to their original audience.
+Try `/ask prompt:What is dvc.labs?` in the commands channel. Set `private:true` to make the question, answer and continuation cards visible only to you in Discord. Ask follow-up questions in the same reply mode. Use **Forget** on any of your answer cards to clear the current context for that channel and visibility.
+
+If you no longer have the card, use `/ask reset:true private:true` to clear private context or `/ask reset:true` to clear public context. Omit the prompt. The bot confirms privately and sends no new question. Include a prompt alongside `reset:true` to start a new conversation. Existing Discord messages remain visible to their original audience.
 
 The bot sends the submitted question and the caller's guild, channel, user ID, and visibility to Hall. The Worker handles OpenAI, moderation, web search, and conversation memory. Context is scoped to those Discord identifiers and visibility, so two bots using the same Worker can share context for the same scope. The bot does not store a separate transcript. Console logs record command outcomes and safe diagnostics only. Discord reply privacy does not prevent processing by Hall or OpenAI; describe both providers and the Worker's retention in your published privacy notice before enabling the commands.
 

@@ -269,16 +269,20 @@ export class InteractionRouter {
       await this.respond(interaction, 'hallAI unavailable', 'The Hall connection is not configured on this server.');
       return 'not_configured';
     }
-    const prompt = interaction.options.getString('prompt')?.trim() ?? '';
-    if (!prompt || prompt.length > MAX_HALL_PROMPT) {
-      await this.respond(interaction, 'Question needed', `Enter a question of up to ${MAX_HALL_PROMPT.toLocaleString('en')} characters.`);
-      return 'invalid_question';
-    }
+    const input = interaction.options.getString('prompt');
+    const prompt = input?.trim() ?? '';
+    const reset = interaction.options.getBoolean('reset') === true;
     const scope: HallScope = { guildId: config.guildId, channelId: interaction.channelId, userId: interaction.user.id,
       private: interaction.options.getBoolean('private') === true };
+    if (input == null && reset) return this.clearHallContext(interaction, hall, scope);
+    if (!prompt || prompt.length > MAX_HALL_PROMPT) {
+      await this.respond(interaction, 'Question needed',
+        `Enter a question of up to ${MAX_HALL_PROMPT.toLocaleString('en')} characters, or use reset:true without a prompt to clear context.`);
+      return 'invalid_question';
+    }
     await interaction.deferReply(scope.private ? { flags: MessageFlags.Ephemeral } : {});
     try {
-      const answer = await hall.ask(scope, prompt, interaction.options.getBoolean('reset') === true);
+      const answer = await hall.ask(scope, prompt, reset);
       const [first, ...continuations] = hallCards(prompt, answer, config.emoji, scope.userId, scope.private);
       await interaction.editReply(first!);
       try {
@@ -312,31 +316,51 @@ export class InteractionRouter {
   }
 
   private async forgetHall(interaction: ButtonInteraction): Promise<void> {
-    const { config, hall, audit } = this.deps;
+    const { config, hall } = this.deps;
     const target = parseHallForget(interaction.customId);
-    if (!hall || !this.deps.isReady() || !target || target.ownerId !== interaction.user.id
-      || interaction.guildId !== config.guildId || interaction.channelId !== config.commandsChannelId
+    if (!target || interaction.guildId !== config.guildId || interaction.channelId !== config.commandsChannelId
       || interaction.message.author.id !== this.deps.botId()
       || target.private !== interaction.message.flags.has(MessageFlags.Ephemeral)
       || !hasEnabledButton(interaction.message.components.map(component => component.toJSON()), interaction.customId)) {
+      await this.respond(interaction, 'Forget unavailable',
+        'This button can’t be used here. Use /ask with reset:true and no prompt in the commands channel. Add private:true to clear private context.');
+      return;
+    }
+    if (target.ownerId !== interaction.user.id) {
       await this.respond(interaction, 'Forget unavailable', 'Only the member who asked can clear the context from their /ask reply.');
       return;
     }
+    if (!this.deps.isReady()) {
+      await this.respond(interaction, 'Bot not ready', 'Please try again when the bot is ready.');
+      return;
+    }
+    if (!hall) {
+      await this.respond(interaction, 'hallAI unavailable', 'The Hall connection is not configured on this server.');
+      return;
+    }
+    await this.clearHallContext(interaction, hall, {
+      guildId: config.guildId, channelId: interaction.channelId, userId: interaction.user.id, private: target.private,
+    });
+  }
+
+  private async clearHallContext(interaction: ButtonInteraction | ChatInputCommandInteraction,
+    hall: HallCommands, scope: HallScope): Promise<string> {
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
     let outcome = 'error';
     try {
-      await hall.forget({ guildId: config.guildId, channelId: interaction.channelId, userId: target.ownerId, private: target.private });
+      await hall.forget(scope);
       outcome = 'success';
       await this.respond(interaction, 'Hall context cleared',
-        `Your ${target.private ? 'private' : 'public'} conversation context for this channel was cleared. Existing Discord messages stay in place.`);
+        `Your ${scope.private ? 'private' : 'public'} conversation context for this channel was cleared. Existing Discord messages stay in place.`);
     } catch (error) {
       if (!(error instanceof HallError)) throw error;
       outcome = error.kind;
       await this.respond(interaction, 'Context could not be cleared', this.hallErrorMessage(error));
     } finally {
-      audit.record({ event: 'hall_context_reset', title: 'Hall context reset', outcome, userId: interaction.user.id,
+      this.deps.audit.record({ event: 'hall_context_reset', title: 'Hall context reset', outcome, userId: interaction.user.id,
         channelId: interaction.channelId, discord: false });
     }
+    return outcome;
   }
 
   private async memberPage(interaction: ButtonInteraction): Promise<void> {

@@ -40,7 +40,7 @@ test('the registered set includes a single /ask prompt and no standalone Bulleti
     [ApplicationCommandOptionType.Boolean, 'private'],
     [ApplicationCommandOptionType.Boolean, 'reset'],
   ]);
-  assert.ok(ask.options?.[0]?.required);
+  assert.notEqual(ask.options?.[0]?.required, true); // reset can run without a prompt.
 });
 
 test('command sync updates changed permissions, descriptions, types, and missing or extra commands', async () => {

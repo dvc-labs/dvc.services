@@ -16,6 +16,7 @@ export interface CherryApproval extends ApprovalKey {
 export interface CherryApprovalStore {
   get(key: ApprovalKey): SavedCherryApproval | undefined;
   begin(approval: CherryApproval): void;
+  cancelUnconfirmed(key: ApprovalKey): void;
   confirmRole(key: ApprovalKey): void;
   recordNotice(key: ApprovalKey, messageId: string): void;
 }
@@ -78,6 +79,13 @@ export class BotState implements CherryApprovalStore {
     this.db.prepare(
       'INSERT INTO cherry_approvals (guild_id, request_id, applicant_id, moderator_id, role_id, approved_at) VALUES (?, ?, ?, ?, ?, ?)',
     ).run(approval.guildId, approval.requestId, approval.applicantId, approval.moderatorId, approval.roleId, approval.approvedAt);
+  }
+
+  cancelUnconfirmed(key: ApprovalKey): void {
+    const { changes } = this.db.prepare(
+      'DELETE FROM cherry_approvals WHERE guild_id = ? AND request_id = ? AND role_confirmed = 0 AND announcement_id IS NULL',
+    ).run(key.guildId, key.requestId);
+    if (changes !== 1) throw new Error('Unconfirmed approval record missing');
   }
 
   confirmRole(key: ApprovalKey): void {

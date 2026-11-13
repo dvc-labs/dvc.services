@@ -59,9 +59,9 @@ function fixture(kind: 'command' | 'button' | 'modal' = 'button') {
     customId: kind === 'modal' ? 'dvc:verify:form:v1:member:panel' : VERIFY_CUSTOM_ID,
     commandName: 'about', memberPermissions: new PermissionsBitField(),
     resolvedMember: { id: '777777777777777777' } as { id: string } | null,
-    prompt: 'How does verification work?', privateReply: false, resetContext: false,
+    prompt: 'How does verification work?' as string | null, privateReply: false, resetContext: false,
     options: { getUser: () => ({ id: '777777777777777777' }), getMember: () => raw.resolvedMember,
-      getString: (): string => raw.prompt, getBoolean: (name: string): boolean => name === 'private' ? raw.privateReply : raw.resetContext },
+      getString: (): string | null => raw.prompt, getBoolean: (name: string): boolean => name === 'private' ? raw.privateReply : raw.resetContext },
     deferred: false, replied: false, ephemeral: null as boolean | null, responseId: 'reply-0',
     isChatInputCommand: () => raw.kind === 'command', isButton: () => raw.kind === 'button',
     isModalSubmit: () => raw.kind === 'modal',
@@ -726,18 +726,44 @@ test('/ask defers in the chosen reply mode and keeps the question, answer and co
 });
 
 test('/ask validates its configuration, prompt, and server channel before contacting Hall', async () => {
-  for (const invalid of ['guild', 'channel', 'disabled', 'blank', 'length']) {
+  for (const invalid of ['guild', 'channel', 'disabled', 'no_prompt', 'blank', 'length']) {
     const f = fixture('command');
     f.raw.commandName = 'ask';
-    if (invalid !== 'disabled') f.deps.hall = { ask: async () => { assert.fail('Unexpected Hall request'); }, forget: async () => {} };
+    if (invalid !== 'disabled') f.deps.hall = { ask: async () => { assert.fail('Unexpected Hall request'); },
+      forget: async () => { assert.fail('Unexpected reset'); } };
     if (invalid === 'guild') f.raw.guildId = 'another';
     if (invalid === 'channel') f.raw.channelId = 'another';
+    if (invalid === 'no_prompt') f.raw.prompt = null;
+    if (['guild', 'channel', 'disabled'].includes(invalid)) {
+      f.raw.prompt = null;
+      f.raw.resetContext = true;
+    }
     if (invalid === 'blank') f.raw.prompt = '   ';
     if (invalid === 'length') f.raw.prompt = 'x'.repeat(1_001);
     await f.run();
     assert.equal(f.raw.deferred, false, invalid);
     assert.equal(f.raw.ephemeral, true, invalid);
     assert.equal(f.replies.length, 1, invalid);
+  }
+});
+
+test('/ask reset:true without a prompt clears the chosen context privately without generating an answer', async () => {
+  for (const privateReply of [false, true]) {
+    const f = fixture('command');
+    f.raw.commandName = 'ask'; f.raw.prompt = null;
+    f.raw.resetContext = true; f.raw.privateReply = privateReply;
+    let resets = 0;
+    f.deps.hall = { ask: async () => { assert.fail('Reset-only must not generate an answer'); }, forget: async scope => {
+      resets++;
+      assert.equal(f.raw.ephemeral, true);
+      assert.deepEqual(scope, { guildId: 'guild', channelId: 'commands', userId: f.raw.user.id, private: privateReply });
+    } };
+    await f.run();
+    assert.equal(resets, 1);
+    assert.deepEqual(f.replies[0], { flags: MessageFlags.Ephemeral });
+    assert.match(messageText(f.replies[1]), new RegExp(`${privateReply ? 'private' : 'public'} conversation context`));
+    assert.deepEqual(f.events, []);
+    assert.deepEqual(f.deleted, []);
   }
 });
 
@@ -750,7 +776,7 @@ test('a failed public /ask leaves no question or upstream error in the channel o
   assert.match(messageText(f.replies[1]), /Request finished/);
   assert.equal((f.replies[2] as { flags: number }).flags, MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral);
   assert.match(messageText(f.replies[2]), /Hall connection was refused/);
-  assert.ok(!JSON.stringify([f.replies, f.logs]).includes(f.raw.prompt));
+  assert.ok(!JSON.stringify([f.replies, f.logs]).includes(f.raw.prompt!));
   assert.equal(f.events.length, 0);
   assert.ok(f.logs.some(([, event, fields]) => event === 'hall_request_failed' && fields?.status === 403));
 });
@@ -782,10 +808,11 @@ test('Forget clears the conversation for its requester and reply mode, without e
   }
 });
 
-test('Forget never clears a conversation from a different owner, guild, channel, author, or reply mode', async () => {
-  for (const invalid of ['owner', 'guild', 'channel', 'author', 'visibility', 'missing_button', 'not_ready']) {
+test('Forget is denied privately and explains why the button cannot be used', async () => {
+  for (const invalid of ['owner', 'guild', 'channel', 'author', 'visibility', 'missing_button', 'not_ready', 'not_configured']) {
     const f = forgetFixture(false);
-    f.deps.hall = { ask: async () => { assert.fail('Unexpected generation'); }, forget: async () => { assert.fail('Unexpected reset'); } };
+    if (invalid !== 'not_configured') f.deps.hall = { ask: async () => { assert.fail('Unexpected generation'); },
+      forget: async () => { assert.fail('Unexpected reset'); } };
     if (invalid === 'owner') f.raw.user.id = '888888888888888888';
     if (invalid === 'guild') f.raw.guildId = 'elsewhere';
     if (invalid === 'channel') f.raw.channelId = 'elsewhere';
@@ -797,6 +824,10 @@ test('Forget never clears a conversation from a different owner, guild, channel,
     assert.equal(f.raw.deferred, false, invalid);
     assert.equal(f.raw.ephemeral, true, invalid);
     assert.deepEqual(f.events, [], invalid);
+    const wording = invalid === 'owner' ? /Only the member who asked/
+      : invalid === 'not_ready' ? /Bot not ready/
+        : invalid === 'not_configured' ? /Hall connection is not configured/ : /This button can’t be used here/;
+    assert.match(messageText(f.replies[0]), wording, invalid);
   }
 });
 

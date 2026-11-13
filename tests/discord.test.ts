@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType, Collection, MessageFlags,
-  PermissionFlagsBits, PermissionsBitField, type Client, type Guild, type TextChannel } from 'discord.js';
+  PermissionFlagsBits, PermissionsBitField, RESTJSONErrorCodes, Routes, type Client, type Guild, type TextChannel } from 'discord.js';
 import { DiscordBulletinGateway, DiscordMinecrafterGateway, DiscordVerificationGateway, discordPanelRepository, preflight } from '../src/discord.js';
 import { ensureVerificationPanel } from '../src/panel.js';
 import { BULLETIN_JOIN_REASON, BULLETIN_LEAVE_REASON, BULLETIN_PANEL_BUTTON, BULLETIN_VERIFY_BUTTON,
@@ -171,25 +171,43 @@ test('Minecrafter is awarded once to the eligible applicant and cannot grant acc
   f.roles.set(roleId, role);
   const memberRoles = new Set([f.config.verificationRoleId]);
   const writes: unknown[] = [];
+  const member = { roles: [...memberRoles], user: { bot: false }, pending: false };
+  let lookupError: Error | undefined;
+  Object.assign(f.guild, { client: { rest: { get: async (route: string) => {
+    assert.equal(route, Routes.guildMember(f.config.guildId, userId));
+    if (lookupError) throw lookupError;
+    return { ...member, roles: [...memberRoles] };
+  } } } });
   Object.assign(f.guild.members, {
-    fetch: async ({ user, force }: { user: string; force: boolean }) => {
-      assert.equal(user, userId); assert.equal(force, true);
-      return { roles: { cache: memberRoles }, user: { bot: false } };
-    },
     addRole: async (options: unknown) => { writes.push(options); memberRoles.add(roleId); },
   });
   const gateway = new DiscordMinecrafterGateway(f.guild as unknown as Guild, f.config, roleId,
     f.channels.get(TEST_MOD_CHANNEL_ID) as unknown as TextChannel);
   f.memberView.set(TEST_MOD_CHANNEL_ID, new Set([roleId]));
-  await assert.rejects(gateway.award(userId), /Keep MOD_CHANNEL_ID private/);
+  await assert.rejects(gateway.prepareAward(userId), /Keep MOD_CHANNEL_ID private/);
   f.memberView.clear();
   f.hierarchy.set(roleId, 0);
-  await assert.rejects(gateway.award(userId), /above the Minecrafter role/);
+  await assert.rejects(gateway.prepareAward(userId), /above the Minecrafter role/);
   f.hierarchy.clear();
-  await gateway.award(userId);
-  await gateway.award(userId);
+  const grant = await gateway.prepareAward(userId);
+  assert.deepEqual(writes, []);
+  await grant();
+  await (await gateway.prepareAward(userId))();
+  member.pending = true;
+  await assert.rejects(gateway.prepareAward(userId), /must still have access/);
+  member.pending = false;
   memberRoles.delete(f.config.verificationRoleId);
-  await assert.rejects(gateway.award(userId), /must still have access/);
+  await assert.rejects(gateway.prepareAward(userId), /must still have access/);
+  assert.equal(await gateway.hasRole(userId, roleId), true);
+  // A stale guild role cache must not hide a held role during recovery.
+  f.roles.delete(roleId);
+  assert.equal(await gateway.hasRole(userId, roleId), true);
+  lookupError = Object.assign(new Error('Unknown member'), { code: RESTJSONErrorCodes.UnknownMember, status: 404 });
+  assert.equal(await gateway.hasRole(userId, roleId), false);
+  f.roles.set(roleId, role);
+  await assert.rejects(gateway.prepareAward(userId), /must still have access/);
+  lookupError = Object.assign(new Error('Missing access'), { code: RESTJSONErrorCodes.MissingAccess, status: 403 });
+  await assert.rejects(gateway.hasRole(userId, roleId), { code: RESTJSONErrorCodes.MissingAccess });
   assert.deepEqual(writes, [{ user: userId, role: roleId, reason: MINECRAFTER_ROLE_REASON }]);
 });
 

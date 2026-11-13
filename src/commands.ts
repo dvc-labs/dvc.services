@@ -9,11 +9,11 @@ export const commands = [
   new SlashCommandBuilder().setName('member')
     .setDescription('Inspect a server member’s profile, roles, permissions, and current status.')
     .addUserOption(option => option.setName('user').setDescription('The server member to look up.').setRequired(true)),
-  new SlashCommandBuilder().setName('ask').setDescription('Ask hallAI a question. Use Forget on the reply to clear context.')
+  new SlashCommandBuilder().setName('ask').setDescription('Ask hallAI a question. Use reset without a question to clear context.')
     .addStringOption(option => option.setName('prompt').setDescription('Your question (sent to Hall and OpenAI; avoid sensitive information).')
-      .setRequired(true).setMinLength(1).setMaxLength(MAX_HALL_PROMPT))
-    .addBooleanOption(option => option.setName('private').setDescription('Only show the question and answer to you (default: public).'))
-    .addBooleanOption(option => option.setName('reset').setDescription('Clear this conversation’s context before asking.')),
+      .setMinLength(1).setMaxLength(MAX_HALL_PROMPT))
+    .addBooleanOption(option => option.setName('private').setDescription('Use your private conversation (default: public).'))
+    .addBooleanOption(option => option.setName('reset').setDescription('Clear this conversation’s context, with or without a new question.')),
   new SlashCommandBuilder().setName('cherrycreek').setDescription('Request access to the Cherry Creek Java server.'),
 ];
 

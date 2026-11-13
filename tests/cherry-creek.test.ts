@@ -37,7 +37,8 @@ function fixture() {
   const historyReads: (string | undefined)[] = [];
   const permissions = new PermissionsBitField([PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ReadMessageHistory]);
   const options = {
-    failAnnouncement: false, failDecision: false, failReceipt: false, failRole: false,
+    failAnnouncement: false, failDecision: false, failReceipt: false, failRole: false, failRoleCheck: false,
+    applicantCanReceiveRole: true, grantWithoutResponse: false,
     async beforeEdit() {}, async beforeAnnounce() {}, async beforeHistory() {}, async beforeSend() {},
   };
   const mod = {
@@ -84,15 +85,30 @@ function fixture() {
   const roleWrites: string[] = [];
   const minecrafter = {
     roleId: MINECRAFTER_ROLE,
-    award: async (id: string) => {
-      if (options.failRole) throw new Error('private REST details');
-      if (!roleWrites.includes(id)) roleWrites.push(id);
+    prepareAward: async (id: string) => {
+      if (!options.applicantCanReceiveRole) throw new Error('Applicant ineligible');
+      return async () => {
+        if (options.failRole) throw new Error('private REST details');
+        if (!roleWrites.includes(id)) {
+          roleWrites.push(id);
+          if (options.grantWithoutResponse) throw new Error('Response lost after granting role');
+        }
+      };
+    },
+    hasRole: async (id: string, roleId: string) => {
+      assert.equal(roleId, MINECRAFTER_ROLE);
+      if (options.failRoleCheck) throw new Error('private REST details');
+      return roleWrites.includes(id);
     },
   };
   const records = new Map<string, SavedCherryApproval>();
   const approvals: CherryApprovalStore = {
     get: key => records.get(key.requestId),
     begin: approval => { records.set(approval.requestId, { ...approval, roleConfirmed: false, announcementId: null }); },
+    cancelUnconfirmed: key => {
+      assert.equal(records.get(key.requestId)?.roleConfirmed, false);
+      records.delete(key.requestId);
+    },
     confirmRole: key => { records.get(key.requestId)!.roleConfirmed = true; },
     recordNotice: (key, announcementId) => { records.get(key.requestId)!.announcementId = announcementId; },
   };
@@ -287,6 +303,20 @@ test('declining closes the staff card without any public announcement', async ()
   assert.deepEqual(f.roleWrites, []);
 });
 
+test('an ineligible applicant fails Accept before storage and can still be declined', async () => {
+  const f = fixture(); await f.submit();
+  f.options.applicantCanReceiveRole = false;
+  const accept = f.reviewer();
+  await f.service.review(accept.button, f.config.applicationId);
+  assert.match(messageText(accept.replies.at(-1)), /Applicant could not be approved/);
+  assert.equal(f.approvals.get({ guildId: f.config.guildId, requestId: MESSAGE }), undefined);
+  const decline = f.reviewer(); decline.raw.customId = BUTTON.replace('accepted', 'declined');
+  await f.service.review(decline.button, f.config.applicationId);
+  assert.match(messageText(f.edits[0]), /Declined/);
+  assert.deepEqual(f.roleWrites, []);
+  assert.deepEqual(f.announcements, []);
+});
+
 test('a failed role grant cannot ping or close the request; a new instance can finish the saved approval', async t => {
   const dir = mkdtempSync(join(tmpdir(), 'dvc-cherry-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
@@ -307,10 +337,6 @@ test('a failed role grant cannot ping or close the request; a new instance can f
   f.options.failRole = false;
   const restarted = new BotState(dir);
   try {
-    const decline = f.reviewer();
-    decline.raw.customId = BUTTON.replace('accepted', 'declined');
-    await f.freshService(restarted).review(decline.button, f.config.applicationId);
-    assert.match(messageText(decline.replies.at(-1)), /Approval already started/);
     await f.freshService(restarted).review(f.reviewer().button, f.config.applicationId);
     assert.deepEqual(f.roleWrites, [APPLICANT]);
     assert.equal(f.announcements.length, 1);
@@ -319,6 +345,54 @@ test('a failed role grant cannot ping or close the request; a new instance can f
     assert.equal(approval?.announcementId, ANNOUNCEMENT);
     assert.ok(!JSON.stringify(approval).includes(USERNAME));
   } finally { restarted.close(); }
+});
+
+test('Decline can close a saved but unsuccessful approval after restart and removes only that unfinished record', async t => {
+  const dir = mkdtempSync(join(tmpdir(), 'dvc-cherry-decline-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const f = fixture(); await f.submit();
+  const key = { guildId: f.config.guildId, requestId: MESSAGE };
+  const first = new BotState(dir);
+  const otherKey = { ...key, requestId: ANNOUNCEMENT };
+  try {
+    f.options.failRole = true;
+    await f.freshService(first).review(f.reviewer().button, f.config.applicationId);
+    const failed = first.get(key);
+    assert.equal(failed?.roleConfirmed, false);
+    first.begin({ ...failed!, ...otherKey });
+    first.confirmRole(otherKey);
+  } finally { first.close(); }
+  const restarted = new BotState(dir);
+  try {
+    const decline = f.reviewer(); decline.raw.customId = BUTTON.replace('accepted', 'declined');
+    await f.freshService(restarted).review(decline.button, f.config.applicationId);
+    assert.match(messageText(f.edits[0]), /Declined/);
+    assert.match(messageText(decline.replies.at(-1)), /whitelisted this Java account in Paper/);
+    assert.equal(restarted.get(key), undefined);
+    assert.equal(restarted.get(otherKey)?.roleConfirmed, true);
+    assert.deepEqual(f.roleWrites, []);
+    assert.deepEqual(f.announcements, []);
+  } finally { restarted.close(); }
+});
+
+test('Decline leaves an approval open when the grant was confirmed, the role is held, or Discord cannot confirm its absence', async () => {
+  for (const condition of ['confirmed', 'lost_response', 'lookup_failed']) {
+    const f = fixture(); await f.submit();
+    f.options.failDecision = condition === 'confirmed';
+    f.options.grantWithoutResponse = condition === 'lost_response';
+    f.options.failRole = condition === 'lookup_failed';
+    await f.service.review(f.reviewer().button, f.config.applicationId);
+    if (condition === 'confirmed') f.roleWrites.length = 0; // A recorded grant stays protected even after later removal.
+    f.options.failDecision = false;
+    f.options.failRoleCheck = condition === 'lookup_failed';
+    const decline = f.reviewer(); decline.raw.customId = BUTTON.replace('accepted', 'declined');
+    await f.service.review(decline.button, f.config.applicationId);
+    assert.match(messageText(decline.replies.at(-1)), condition === 'lookup_failed'
+      ? /Could not check Minecrafter/ : /Approval cannot be declined/);
+    assert.equal(f.approvals.get({ guildId: f.config.guildId, requestId: MESSAGE })?.roleConfirmed, condition === 'confirmed');
+    assert.deepEqual(f.edits, [], condition);
+    assert.deepEqual(f.announcements, [], condition);
+  }
 });
 
 test('an unavailable approval store prevents role changes and announcements', async () => {
