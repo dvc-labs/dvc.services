@@ -20,7 +20,7 @@
     "check": "npm run typecheck && npm test && npm run build",
     "healthcheck": "node dist/healthcheck.js"
   },
-  "dependencies": { "discord.js": "14.27.0" },
+  "dependencies": { "discord.js": "14.28.1" },
   "devDependencies": {
     "@types/node": "24.19.2",
     "tsx": "4.23.15",
