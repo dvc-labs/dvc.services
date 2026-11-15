@@ -1,4 +1,4 @@
-import { ChannelType, PermissionFlagsBits, RESTJSONErrorCodes, Routes,
+import { ChannelType, PermissionFlagsBits, RESTJSONErrorCodes, Routes, roleMention,
   type Client, type Guild, type Message, type RESTGetAPIGuildMemberResult, type TextChannel } from 'discord.js';
 import type { Config } from './config.js';
 import { SetupError } from './errors.js';
@@ -148,10 +148,17 @@ export function discordPanelRepository(channel: TextChannel, config: Pick<Config
   };
 }
 
-export function logChannelAllowsChatCopies(guild: Guild, channel: TextChannel, config: Config): boolean {
-  const ordinaryRoles = [guild.roles.everyone, ...[config.verificationRoleId, config.bulletinRoleId, config.minecrafterRoleId]
-    .flatMap(id => id ? guild.roles.cache.get(id) ?? [] : [])];
-  return config.messageLogContent && !ordinaryRoles.some(role => channel.permissionsFor(role).has(PermissionFlagsBits.ViewChannel));
+export function logChannelChatCopyBlockReason(guild: Guild, channel: TextChannel, config: Config): string | undefined {
+  if (!config.messageLogContent) return 'Hidden because message text logging is disabled.';
+  const ordinaryRoles = [config.verificationRoleId, guild.id, config.bulletinRoleId, config.minecrafterRoleId];
+  for (const id of ordinaryRoles) {
+    if (!id) continue;
+    const role = id === guild.id ? guild.roles.everyone : guild.roles.cache.get(id);
+    if (role && channel.permissionsFor(role).has(PermissionFlagsBits.ViewChannel)) {
+      return 'Hidden because the logs channel is visible to ' + (id === guild.id ? '@everyone' : roleMention(id));
+    }
+  }
+  return undefined;
 }
 
 export async function preflight(client: Client<true>, config: Config) {

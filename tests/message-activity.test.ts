@@ -20,7 +20,7 @@ function fixture(messageLogContent = true) {
   const audit = new AuditLog(logger);
   let privateLogs = true, ready = true;
   audit.setSink(discordAuditSink({ send: async (payload: unknown) => { cards.push(payload); } } as unknown as TextChannel,
-    () => privateLogs));
+    () => privateLogs ? undefined : 'Hidden because the logs channel is visible to <@&' + config.verificationRoleId + '>'));
   const activity = new MessageActivity({ config, audit, isReady: () => ready });
   const original = { id: MESSAGE, channelId: CHANNEL, guildId: config.guildId as string | null, channel: null as unknown,
     author: { id: AUTHOR, bot: false }, system: false, webhookId: null as string | null, content: 'The original lore.',
@@ -97,7 +97,9 @@ test('copies are omitted in metadata mode and withheld if regular members can se
     assert.equal(f.cards.length, 1);
     assert.match(messageText(f.cards[0]), /Message deleted/);
     assert.doesNotMatch(messageText(f.cards[0]), /The original lore/);
-    assert.equal(messageText(f.cards[0]).includes('Hidden because'), copy);
+    assert.equal(messageText(f.cards[0]).includes('Hidden because the logs channel is visible to <@&'
+      + f.config.verificationRoleId + '>'), copy);
+    assert.deepEqual(JSON.parse(JSON.stringify(f.cards[0])).allowedMentions, { parse: [], repliedUser: false });
   }
 });
 

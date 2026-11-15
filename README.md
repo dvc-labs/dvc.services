@@ -3,7 +3,7 @@
 The Discord service bot for **dvc.labs** — a home for dvc. projects, experiments, and a look behind the scenes.
 
 [![CI](https://github.com/dvc-labs/dvc.services/actions/workflows/ci.yml/badge.svg)](https://github.com/dvc-labs/dvc.services/actions/workflows/ci.yml)
-![Version](https://img.shields.io/badge/version-0.2.5-26bcc5)
+![Version](https://img.shields.io/badge/version-0.2.6-26bcc5)
 ![Node.js](https://img.shields.io/badge/Node.js-24_LTS-26bcc5)
 [![MIT](https://img.shields.io/badge/license-MIT-26bcc5)](LICENSE)
 
@@ -65,6 +65,8 @@ If you no longer have the card, use `/ask reset:true private:true` to clear priv
 ## Logs and data
 
 Message edit cards show the author when known, the source channel, a link, and **Before** and **After** text when available. A delete card includes the message ID and the last observed text. A deletion event doesn't tell the bot who removed the message; Discord's separate native audit entry can identify a moderator when present. Bulk deletions post one summary with up to two cached copies.
+
+If the verification role can view the logs channel, the card keeps the text hidden and names that role without pinging it. Keep the logs channel staff-only to see the copies.
 
 Verification state is the member's Discord role, and the panel lives in Discord message history. Welcome delivery uses a queue of 50 pending DMs, 1.5-second pacing, shutdown cancellation, and per-process join deduplication. A first member update without a cached prior state records current values explicitly as a snapshot. Native audit entries record actual administrative actions without guessing an actor for unrelated join/leave events. The bot's own verification, Bulletin, and Minecrafter role-change audit copies stay in the console to avoid duplicate Discord posts. Logs include identifiers, membership changes, and native audit reasons, so restrict access and choose retention appropriately. See [SECURITY.md](SECURITY.md).
 

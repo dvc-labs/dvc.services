@@ -6,7 +6,7 @@ import { CherryCreek } from './cherry-creek.js';
 import { syncCommands } from './commands.js';
 import { clientOptions, intentFailureHint } from './client-options.js';
 import { loadConfig, type Config } from './config.js';
-import { DiscordMinecrafterGateway, discordPanelRepository, logChannelAllowsChatCopies, preflight } from './discord.js';
+import { DiscordMinecrafterGateway, discordPanelRepository, logChannelChatCopyBlockReason, preflight } from './discord.js';
 import { SetupError } from './errors.js';
 import { HallClient } from './hall.js';
 import { createHealthServer } from './health.js';
@@ -72,9 +72,9 @@ async function shutdown(reason: string, code: number): Promise<void> {
 
 async function initialise(readyClient: Client<true>): Promise<void> {
   const resources = await preflight(readyClient, config);
-  const canCopyChat = () => logChannelAllowsChatCopies(resources.guild, resources.logsChannel, config);
-  audit.setSink(discordAuditSink(resources.logsChannel, canCopyChat));
-  if (config.messageLogContent && !canCopyChat()) {
+  const chatCopyBlockReason = () => logChannelChatCopyBlockReason(resources.guild, resources.logsChannel, config);
+  audit.setSink(discordAuditSink(resources.logsChannel, chatCopyBlockReason));
+  if (config.messageLogContent && chatCopyBlockReason()) {
     logger.write('warn', 'message_log_copies_hidden', {
       detail: 'Keep LOGS_CHANNEL_ID private. Chat text is withheld while @everyone or an ordinary member role can see it.',
     });
