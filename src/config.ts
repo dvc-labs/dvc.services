@@ -1,6 +1,6 @@
 import { resolve } from 'node:path';
 import { SetupError } from './errors.js';
-import { DVC_EMOJI } from './version.js';
+import { CHERRY_CREEK_EMOJI, DVC_EMOJI } from './version.js';
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
 export interface Config {
@@ -12,6 +12,7 @@ export interface Config {
   readonly verificationChannelId: string;
   readonly commandsChannelId: string;
   readonly logsChannelId: string;
+  readonly messageLogContent: boolean;
   readonly verificationMessageId: string | undefined;
   // Optional self-service news pings managed through the verification panel.
   readonly bulletinRoleId: string | undefined;
@@ -24,6 +25,7 @@ export interface Config {
   readonly port: number;
   readonly logLevel: LogLevel;
   readonly emoji: string;
+  readonly cherryCreekEmoji: string;
 }
 
 function snowflake(env: NodeJS.ProcessEnv, key: string): string {
@@ -44,6 +46,16 @@ function workerOrigin(value: string | undefined): string | undefined {
   return url.origin;
 }
 
+function customEmoji(env: NodeJS.ProcessEnv, key: string, fallback: string): string {
+  const value = env[key]?.trim() || fallback;
+  if (value.toLowerCase() === 'none') return '';
+  const match = /^<a?:[a-zA-Z0-9_]{2,32}:(\d{17,20})>$/.exec(value);
+  if (!match || BigInt(match[1]!) > 18_446_744_073_709_551_615n) {
+    throw new SetupError(`${key} must be a custom emoji such as ${fallback}, or none.`);
+  }
+  return value;
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const token = env.DISCORD_TOKEN?.trim();
   if (!token || /\s/.test(token) || token.startsWith('Bot ')) {
@@ -58,11 +70,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   if (!['debug', 'info', 'warn', 'error'].includes(logLevel)) {
     throw new SetupError('LOG_LEVEL must be debug, info, warn, or error.');
   }
-  const emojiValue = env.DVC_EMOJI?.trim() || DVC_EMOJI;
-  const emoji = emojiValue.toLowerCase() === 'none' ? '' : emojiValue;
-  const emojiMatch = /^<a?:[a-zA-Z0-9_]{2,32}:(\d{17,20})>$/.exec(emoji);
-  if (emoji && (!emojiMatch || BigInt(emojiMatch[1]!) > 18_446_744_073_709_551_615n)) {
-    throw new SetupError('DVC_EMOJI must be a custom emoji such as <:dvc:1566457051465388194>, or none.');
+  const messageLogContent = env.MESSAGE_LOG_CONTENT?.trim().toLowerCase() || 'true';
+  if (messageLogContent !== 'true' && messageLogContent !== 'false') {
+    throw new SetupError('MESSAGE_LOG_CONTENT must be true or false.');
   }
   const config: Config = {
     token,
@@ -73,6 +83,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     verificationChannelId: snowflake(env, 'VERIFICATION_CHANNEL_ID'),
     commandsChannelId: snowflake(env, 'COMMANDS_CHANNEL_ID'),
     logsChannelId: snowflake(env, 'LOGS_CHANNEL_ID'),
+    messageLogContent: messageLogContent === 'true',
     verificationMessageId: env.VERIFICATION_MESSAGE_ID?.trim()
       ? snowflake(env, 'VERIFICATION_MESSAGE_ID') : undefined,
     bulletinRoleId: env.BULLETIN_ROLE_ID?.trim() ? snowflake(env, 'BULLETIN_ROLE_ID') : undefined,
@@ -84,7 +95,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     hallApiKey: env.HALLAI_API_KEY?.trim() || undefined,
     port,
     logLevel: logLevel as LogLevel,
-    emoji,
+    emoji: customEmoji(env, 'DVC_EMOJI', DVC_EMOJI),
+    cherryCreekEmoji: customEmoji(env, 'CHERRY_CREEK_EMOJI', CHERRY_CREEK_EMOJI),
   };
   if (config.verificationRoleId === config.guildId) {
     throw new SetupError('VERIFICATION_ROLE_ID cannot be the @everyone role.');

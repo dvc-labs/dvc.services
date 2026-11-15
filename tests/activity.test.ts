@@ -6,7 +6,7 @@ import { GuildActivity } from '../src/activity.js';
 import { AuditLog, type AuditEvent } from '../src/audit.js';
 import { Logger } from '../src/logger.js';
 import { DVC_EMOJI } from '../src/version.js';
-import { messageText, testConfig } from './helpers.js';
+import { messageLinks, messageText, testConfig } from './helpers.js';
 
 function fixture(timing?: { wait: (ms: number, signal: AbortSignal) => Promise<void> }) {
   const config = testConfig();
@@ -43,8 +43,12 @@ test('new members receive one kind welcome with verification and GitHub links, p
   const payload = JSON.parse(JSON.stringify(f.messages[0]));
   assert.equal(payload.flags, MessageFlags.IsComponentsV2);
   assert.deepEqual(payload.allowedMentions, { parse: [], repliedUser: false });
-  assert.match(JSON.stringify(payload), /https:\/\/github.com\/dvc-labs/);
-  assert.match(JSON.stringify(payload), /Follow dvc.labs on GitHub/);
+  assert.match(messageText(payload), /staff logs may include copies of their text/);
+  const emojiId = '1566457051465388194';
+  assert.deepEqual(messageLinks(payload), [
+    { label: 'Open dvc.labs', url: 'https://discord.com/channels/' + f.config.guildId + '/' + f.config.verificationChannelId, emojiId },
+    { label: 'Follow dvc.labs on GitHub', url: 'https://github.com/dvc-labs', emojiId },
+  ]);
   assert.deepEqual(f.events.map(event => event.outcome), ['joined']);
   assert.ok(f.logs.some(([, event, fields]) => event === 'welcome_dm' && fields?.outcome === 'sent'));
 });
@@ -229,6 +233,26 @@ test('message and thread audit entries resolve their actual author and channel I
   assert.equal(f.events[1]!.userId, undefined);
   assert.equal(f.events[1]!.channelId, f.member.id);
   assert.equal(f.events[2]!.channelId, f.member.id);
+});
+
+test('native AutoMod audit events identify the actual action and rule without a second moderation action', async () => {
+  const f = fixture();
+  const channelId = '999999999999999999';
+  const entry = { id: '100000000000000004', action: AuditLogEvent.AutoModerationBlockMessage, executorId: null,
+    targetId: f.member.id, targetType: 'Unknown', target: null, reason: null, changes: [],
+    extra: { channel: { id: channelId }, autoModerationRuleName: 'Caps Lock' } };
+  f.activity.auditEntry(entry as unknown as GuildAuditLogsEntry, f.member.guild as unknown as Guild);
+  f.activity.auditEntry(entry as unknown as GuildAuditLogsEntry, f.member.guild as unknown as Guild);
+  await f.flush();
+  assert.equal(f.events.length, 1);
+  const event = f.events[0]!;
+  assert.equal(event.event, 'automod_action');
+  assert.equal(event.outcome, 'blocked');
+  assert.match(event.title, /AutoMod · Message blocked/);
+  assert.equal(event.targetUserId, f.member.id);
+  assert.equal(event.channelId, channelId);
+  assert.ok(event.fields?.some(field => field.name === 'Rule' && field.value === 'Caps Lock'));
+  assert.deepEqual(f.messages, []);
 });
 
 test('voice channel changes log native references and ignore microphone-only updates', async () => {

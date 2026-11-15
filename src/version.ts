@@ -7,3 +7,4 @@ export const REPOSITORY_URL = 'https://github.com/dvc-labs/dvc.services';
 export const WEBSITE_URL = 'https://www.davevancauwenberghe.be';
 export const GITHUB_URL = 'https://github.com/dvc-labs';
 export const DVC_EMOJI = '<:dvc:1566457051465388194>';
+export const CHERRY_CREEK_EMOJI = '<:cherrycreek:1571632668104204318>';

@@ -26,6 +26,13 @@ function changedRoles(entry: GuildAuditLogsEntry, key: '$add' | '$remove'): stri
     + (roles.length > 40 ? ` · and ${roles.length - 40} more` : '') : undefined;
 }
 
+const autoModOutcomes = new Map<number, [title: string, outcome: string]>([
+  [AuditLogEvent.AutoModerationBlockMessage, ['Message blocked', 'blocked']],
+  [AuditLogEvent.AutoModerationFlagToChannel, ['Message flagged', 'flagged']],
+  [AuditLogEvent.AutoModerationUserCommunicationDisabled, ['Member timed out', 'timed_out']],
+  [AuditLogEvent.AutoModerationQuarantineUser, ['Member quarantined', 'quarantined']],
+]);
+
 export class GuildActivity {
   private readonly recentJoins = new Map<string, number | null>();
   private readonly auditIds = new Cooldown(3_600_000);
@@ -169,6 +176,17 @@ export class GuildActivity {
     if (!channelId && extra && typeof extra === 'object' && 'channel' in extra) {
       const channel = extra.channel;
       if (channel && typeof channel === 'object' && 'id' in channel && typeof channel.id === 'string') channelId = channel.id;
+    }
+    const autoMod = autoModOutcomes.get(entry.action);
+    if (autoMod) {
+      const rule = extra && typeof extra === 'object' && 'autoModerationRuleName' in extra
+        && typeof extra.autoModerationRuleName === 'string' ? extra.autoModerationRuleName : undefined;
+      this.deps.audit.record({ event: 'automod_action', title: this.title('AutoMod · ' + autoMod[0]), outcome: autoMod[1],
+        ...(entry.targetId ? { targetUserId: entry.targetId } : {}), ...(channelId ? { channelId } : {}),
+        fields: [{ name: 'Rule', value: rule ? displayText(rule, 100) : 'Name unavailable' },
+          { name: 'Audit entry', value: '`' + entry.id + '`' }],
+      });
+      return;
     }
     if (entry.targetId && !userId && !roleId && !channelId) {
       fields.push({ name: 'Target ID', value: `\`${entry.targetId}\` (${humanise(entry.targetType)})` });

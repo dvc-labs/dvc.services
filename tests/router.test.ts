@@ -19,9 +19,10 @@ function fixture(kind: 'command' | 'button' | 'modal' = 'button') {
   const config: Config = {
     token: 'test', guildId: 'guild', applicationId: 'bot', verificationRoleId: 'member-role', adminRoleId: undefined,
     verificationChannelId: 'verification', commandsChannelId: 'commands', logsChannelId: 'logs',
+    messageLogContent: true,
     verificationMessageId: undefined, bulletinRoleId: undefined, hallWorkerUrl: undefined, hallApiKey: undefined,
     modChannelId: undefined, minecraftChannelId: undefined, minecrafterRoleId: undefined, dataDir: '/unused/test/data',
-    port: 8080, logLevel: 'error', emoji: '',
+    port: 8080, logLevel: 'error', emoji: '', cherryCreekEmoji: '',
   };
   const events: AuditEvent[] = [];
   const awarded: string[] = [];

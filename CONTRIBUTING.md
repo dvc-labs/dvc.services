@@ -15,7 +15,7 @@ npm run check
 npm run dev
 ```
 
-Configure guild installation with `bot` and `applications.commands`. Give the bot access to configured channels, Read Message History, and View Audit Log; place its role above the ordinary verification role. Enable Presence and Server Members; leave Message Content disabled. Use `DVC_EMOJI=none` or an emoji owned by your test application. Do not commit `.env`, tokens, raw error objects, or private logs.
+Configure guild installation with `bot` and `applications.commands`. Give the bot access to configured channels, Read Message History, and View Audit Log; place its role above the ordinary verification role. Enable Presence and Server Members. Set `MESSAGE_LOG_CONTENT=false` for metadata-only testing, or turn on Message Content and use a private logs channel to test text copies. Use `DVC_EMOJI=none` and `CHERRY_CREEK_EMOJI=none` or emojis owned by your test app. Do not commit `.env`, tokens, raw error objects, or private logs.
 
 ## Changes
 
@@ -56,7 +56,8 @@ For Discord-facing changes, manually test in the separate server:
 - Native Discord audit entries identify the actual actor and render role/member/channel references without notifications.
 - `/verification` requires Manage Server permission and reuses the panel.
 - Restarting keeps a usable panel without adding another.
-- Discord and console logs show command timing, Cherry Creek decisions and delivery, and observed boost count and level changes without secrets, usernames from whitelist forms, or ordinary message content.
+- Edit, delete, and bulk-delete sample guild messages. Check the author, channel, and staff text copies, including unavailable text after restart. No copied chat appears in console logs. Trigger a test native AutoMod rule and look for its named audit card.
+- Check the Paper code block with a 16-character Java name on a narrow Discord window. Verify the Cherry Creek links and both welcome DM button emojis in the test app.
 
 Describe what you checked in the pull request, including anything you could not run. CI builds the image and checks that the non-root runtime can reopen saved state on a named volume. No production secrets should be added to GitHub Actions.
 

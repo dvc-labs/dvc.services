@@ -6,12 +6,13 @@ import { CherryCreek } from './cherry-creek.js';
 import { syncCommands } from './commands.js';
 import { clientOptions, intentFailureHint } from './client-options.js';
 import { loadConfig, type Config } from './config.js';
-import { DiscordMinecrafterGateway, discordPanelRepository, preflight } from './discord.js';
+import { DiscordMinecrafterGateway, discordPanelRepository, logChannelAllowsChatCopies, preflight } from './discord.js';
 import { SetupError } from './errors.js';
 import { HallClient } from './hall.js';
 import { createHealthServer } from './health.js';
 import { errorSummary, Logger } from './logger.js';
 import { loadMemberReport } from './member.js';
+import { MessageActivity } from './message-activity.js';
 import { ensureVerificationPanel, type VerificationPanelResult } from './panel.js';
 import { InteractionRouter } from './router.js';
 import { BotState } from './state.js';
@@ -33,7 +34,7 @@ if (!hall && (config.hallWorkerUrl || config.hallApiKey)) {
 }
 const audit = new AuditLog(logger);
 const client = new Client({
-  ...clientOptions(),
+  ...clientOptions(config.messageLogContent),
   presence: { activities: [{ name: 'dvc.labs', type: ActivityType.Watching }], status: 'online' },
 });
 
@@ -46,6 +47,7 @@ let bulletin: BulletinService | undefined;
 let cherry: CherryCreek | undefined;
 let refreshPanel: (() => Promise<VerificationPanelResult>) | undefined;
 const activity = new GuildActivity({ config, audit, isReady: () => operational && !stopping });
+const messages = new MessageActivity({ config, audit, isReady: () => operational && !stopping });
 const health = createHealthServer(() => operational && !stopping && client.isReady());
 
 async function shutdown(reason: string, code: number): Promise<void> {
@@ -70,7 +72,13 @@ async function shutdown(reason: string, code: number): Promise<void> {
 
 async function initialise(readyClient: Client<true>): Promise<void> {
   const resources = await preflight(readyClient, config);
-  audit.setSink(discordAuditSink(resources.logsChannel));
+  const canCopyChat = () => logChannelAllowsChatCopies(resources.guild, resources.logsChannel, config);
+  audit.setSink(discordAuditSink(resources.logsChannel, canCopyChat));
+  if (config.messageLogContent && !canCopyChat()) {
+    logger.write('warn', 'message_log_copies_hidden', {
+      detail: 'Keep LOGS_CHANNEL_ID private. Chat text is withheld while @everyone or an ordinary member role can see it.',
+    });
+  }
   const changed = await syncCommands(resources.guild);
   audit.record({ event: 'commands_synced', title: 'Slash commands ready', outcome: changed ? 'updated' : 'unchanged' });
 
@@ -172,6 +180,11 @@ client.on(Events.GuildMemberUpdate, (before, after) => observe('member_update_lo
 client.on(Events.GuildUpdate, (before, after) => observe('guild_update_log_failed', () => activity.guildUpdated(before, after)));
 client.on(Events.GuildAuditLogEntryCreate, (entry, guild) => observe('server_audit_log_failed', () => activity.auditEntry(entry, guild)));
 client.on(Events.VoiceStateUpdate, (before, after) => observe('voice_log_failed', () => activity.voiceChanged(before, after)));
+client.on(Events.MessageCreate, message => observe('message_snapshot_failed', () => messages.created(message)));
+client.on(Events.MessageUpdate, (before, after) => observe('message_edit_log_failed', () => messages.updated(before, after)));
+client.on(Events.MessageDelete, message => observe('message_delete_log_failed', () => messages.deleted(message)));
+client.on(Events.MessageBulkDelete, (deleted, channel) => observe('message_bulk_delete_log_failed',
+  () => messages.bulkDeleted(deleted.values(), channel.id)));
 client.once(Events.ClientReady, readyClient => {
   void initialise(readyClient).catch(error => {
     const detail = error instanceof SetupError ? error.message : errorSummary(error);
@@ -183,7 +196,7 @@ client.once(Events.ClientReady, readyClient => {
 client.on(Events.Error, error => logger.write('error', 'discord_client_error', { error: errorSummary(error) }));
 client.on(Events.ShardError, error => logger.write('warn', 'discord_connection_error', { error: errorSummary(error) }));
 client.on(Events.ShardDisconnect, (event, shardId) => logger.write('warn', 'discord_disconnected', {
-  shardId, closeCode: event.code, detail: intentFailureHint(event),
+  shardId, closeCode: event.code, detail: intentFailureHint(event, config.messageLogContent),
 }));
 client.on(Events.ShardReconnecting, shardId => logger.write('info', 'discord_reconnecting', { shardId }));
 client.on(Events.ShardResume, (shardId, replayedEvents) => logger.write('info', 'bot_reconnected', { outcome: 'resumed', shardId, replayedEvents }));
@@ -209,6 +222,6 @@ logger.write('info', 'bot_starting', { version: VERSION, guildId: config.guildId
 try { await client.login(config.token); }
 catch (error) {
   logger.write('error', 'discord_login_failed', { error: errorSummary(error),
-    detail: intentFailureHint(error) });
+    detail: intentFailureHint(error, config.messageLogContent) });
   await shutdown('discord_login_failed', 1);
 }

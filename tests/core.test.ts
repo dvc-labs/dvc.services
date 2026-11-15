@@ -2,14 +2,14 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import test from 'node:test';
-import { GatewayIntentBits, IntentsBitField, MessageFlags, PermissionFlagsBits, PermissionsBitField } from 'discord.js';
+import { GatewayIntentBits, IntentsBitField, MessageFlags, Partials, PermissionFlagsBits, PermissionsBitField } from 'discord.js';
 import { REQUIRED_GATEWAY_INTENTS, clientOptions, intentFailureHint } from '../src/client-options.js';
 import { commands } from '../src/commands.js';
 import { loadConfig } from '../src/config.js';
 import { errorSummary } from '../src/logger.js';
 import { assertSafeMemberRole, Cooldown, hasEnabledButton, isTrustedVerificationButton, VERIFY_CUSTOM_ID } from '../src/policy.js';
 import { verificationPanel } from '../src/ui.js';
-import { BRAND_COLOR, VERSION } from '../src/version.js';
+import { BRAND_COLOR, CHERRY_CREEK_EMOJI, VERSION } from '../src/version.js';
 import { TEST_MINECRAFT_CHANNEL_ID as minecraft, TEST_MOD_CHANNEL_ID as mod } from './helpers.js';
 
 export function environment(): NodeJS.ProcessEnv {
@@ -175,21 +175,37 @@ test('panel discovery recognises legacy rows and nested V2 buttons without match
   assert.equal(hasEnabledButton([{ ...button, disabled: true }], VERIFY_CUSTOM_ID), false);
 });
 
-test('only the five used intents are requested and message content is excluded', () => {
+test('guild message events are enabled; message content is requested only when copying chat', () => {
   const intents = new IntentsBitField(REQUIRED_GATEWAY_INTENTS);
-  assert.equal(intents.bitfield, 391);
+  assert.equal(intents.bitfield, 903);
+  assert.equal(intents.has(GatewayIntentBits.GuildMessages), true);
   assert.equal(intents.has(GatewayIntentBits.MessageContent), false);
   assert.equal(intents.has(GatewayIntentBits.DirectMessages), false);
-  const options = clientOptions();
+  const options = clientOptions(true);
+  assert.equal(new IntentsBitField(options.intents).bitfield, 33_671);
+  assert.equal(new IntentsBitField(clientOptions(false).intents).bitfield, 903);
+  assert.ok(options.partials?.includes(Partials.Message));
   assert.deepEqual(options.allowedMentions, { parse: [], repliedUser: false });
   assert.ok(options.makeCache);
 });
 
 test('login hints are limited to DisallowedIntents errors and close code 4014', () => {
-  for (const code of ['DisallowedIntents', 4014]) assert.match(intentFailureHint({ code })!, /Server Members and Presence/);
+  for (const code of ['DisallowedIntents', 4014]) {
+    assert.match(intentFailureHint({ code })!, /Server Members and Presence.*Enable Message Content/);
+    assert.doesNotMatch(intentFailureHint({ code }, false)!, /Message Content/);
+  }
   for (const error of [{ code: 'TokenInvalid' }, { code: 4004 }, new Error('Used disallowed intents'), null, 'secret']) {
     assert.equal(intentFailureHint(error), undefined);
   }
+});
+
+test('content copies can be disabled and the Cherry Creek app emoji can be replaced for testing', () => {
+  assert.equal(loadConfig(environment()).messageLogContent, true);
+  assert.equal(loadConfig({ ...environment(), MESSAGE_LOG_CONTENT: 'false' }).messageLogContent, false);
+  assert.throws(() => loadConfig({ ...environment(), MESSAGE_LOG_CONTENT: 'maybe' }), /MESSAGE_LOG_CONTENT/);
+  assert.equal(loadConfig(environment()).cherryCreekEmoji, CHERRY_CREEK_EMOJI);
+  assert.equal(loadConfig({ ...environment(), CHERRY_CREEK_EMOJI: 'none' }).cherryCreekEmoji, '');
+  assert.throws(() => loadConfig({ ...environment(), CHERRY_CREEK_EMOJI: 'not an emoji' }), /CHERRY_CREEK_EMOJI/);
 });
 
 test('test deployments can select another application emoji or disable branding', () => {
