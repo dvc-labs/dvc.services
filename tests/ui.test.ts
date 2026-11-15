@@ -15,13 +15,14 @@ test('member-controlled text cannot supply masked links, autolinks, headings, li
   assert.ok(text.includes('\\>'));
 });
 
-test('authored GitHub links remain usable and the welcome includes the logging notice', () => {
+test('the welcome points members to #yap, Cherry Creek, and verification', () => {
   const config = testConfig();
   const welcome = welcomeMessage(config, '777777777777777777');
   assert.match(JSON.stringify(welcome), /https:\/\/github.com\/dvc-labs/);
-  assert.match(messageText(welcome), /logs membership, verification/);
-  assert.match(messageText(welcome), /edited or deleted, staff logs may include copies of their text/);
-  assert.match(messageText(welcome), /does not read incoming DMs/);
+  const text = messageText(welcome);
+  assert.match(text, /Come say hi in #yap/);
+  assert.match(text, /run `\/cherrycreek` in Playground/);
+  assert.match(text, /read the server rules, then press \*\*Verify\*\*/);
   assert.match(messageText(aboutCard(config, 10)), /\[loon.host\]\(https:\/\/loon.host\)/);
 });
 

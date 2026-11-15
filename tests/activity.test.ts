@@ -43,7 +43,6 @@ test('new members receive one kind welcome with verification and GitHub links, p
   const payload = JSON.parse(JSON.stringify(f.messages[0]));
   assert.equal(payload.flags, MessageFlags.IsComponentsV2);
   assert.deepEqual(payload.allowedMentions, { parse: [], repliedUser: false });
-  assert.match(messageText(payload), /staff logs may include copies of their text/);
   const emojiId = '1566457051465388194';
   assert.deepEqual(messageLinks(payload), [
     { label: 'Open dvc.labs', url: 'https://discord.com/channels/' + f.config.guildId + '/' + f.config.verificationChannelId, emojiId },

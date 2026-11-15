@@ -26,7 +26,8 @@ export interface AuditEvent {
 export type AuditSink = (event: AuditEvent) => Promise<void>;
 const priorityRank = (event: AuditEvent): number => event.priority === 'critical' ? 2 : event.priority === 'important' ? 1 : 0;
 
-export function discordAuditSink(channel: TextChannel, canCopyChat = () => false): AuditSink {
+export function discordAuditSink(channel: TextChannel,
+  chatCopyBlockReason: () => string | undefined = () => 'Hidden because staff-only access was not confirmed.'): AuditSink {
   return async event => {
     const fields = [{ name: 'Result', value: humanise(event.outcome) }];
     if (event.userId) fields.push({ name: 'Member', value: userMention(event.userId) });
@@ -38,8 +39,9 @@ export function discordAuditSink(channel: TextChannel, canCopyChat = () => false
     if (event.targetUserId) fields.push({ name: 'Target member', value: userMention(event.targetUserId) });
     if (event.fields) fields.push(...event.fields);
     if (event.discordFields?.length) {
-      if (canCopyChat()) fields.push(...event.discordFields);
-      else fields.push({ name: 'Message text', value: 'Hidden because the logs channel is visible to ordinary members.' });
+      const reason = chatCopyBlockReason();
+      if (reason === undefined) fields.push(...event.discordFields);
+      else fields.push({ name: 'Message text', value: reason });
     }
     await channel.send(card(event.title, event.detail, fields,
       { footer: `<t:${Math.floor(Date.now() / 1_000)}:f>` }));

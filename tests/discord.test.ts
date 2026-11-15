@@ -3,7 +3,7 @@ import test from 'node:test';
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType, Collection, MessageFlags,
   PermissionFlagsBits, PermissionsBitField, RESTJSONErrorCodes, Routes, type Client, type Guild, type TextChannel } from 'discord.js';
 import { DiscordBulletinGateway, DiscordMinecrafterGateway, DiscordVerificationGateway, discordPanelRepository,
-  logChannelAllowsChatCopies, preflight } from '../src/discord.js';
+  logChannelChatCopyBlockReason, preflight } from '../src/discord.js';
 import { ensureVerificationPanel } from '../src/panel.js';
 import { BULLETIN_JOIN_REASON, BULLETIN_LEAVE_REASON, BULLETIN_PANEL_BUTTON, BULLETIN_VERIFY_BUTTON,
   hasEnabledButton, MINECRAFTER_ROLE_REASON, VERIFY_CUSTOM_ID } from '../src/policy.js';
@@ -57,19 +57,23 @@ test('startup checks Read Message History in verification, command, and log chan
   }
 });
 
-test('the logs channel stops receiving chat copies whenever a configured ordinary role can view it', async () => {
+test('chat copies are withheld and name the ordinary role that can view the logs channel', async () => {
   const f = preflightFixture();
   const role = { id: '777777777777777777', managed: false, permissions: new PermissionsBitField() };
   f.roles.set(role.id, role);
   const config = { ...f.config, minecrafterRoleId: role.id };
   const { guild, logsChannel } = await preflight(f.client, config);
-  assert.equal(logChannelAllowsChatCopies(guild, logsChannel, config), true);
+  assert.equal(logChannelChatCopyBlockReason(guild, logsChannel, config), undefined);
   for (const id of [config.guildId, config.verificationRoleId, role.id]) {
     f.memberView.set(config.logsChannelId, new Set([id]));
-    assert.equal(logChannelAllowsChatCopies(guild, logsChannel, config), false);
+    assert.equal(logChannelChatCopyBlockReason(guild, logsChannel, config),
+      'Hidden because the logs channel is visible to ' + (id === config.guildId ? '@everyone' : '<@&' + id + '>'));
   }
+  f.memberView.set(config.logsChannelId, new Set([config.guildId, config.verificationRoleId]));
+  assert.equal(logChannelChatCopyBlockReason(guild, logsChannel, config),
+    'Hidden because the logs channel is visible to <@&' + config.verificationRoleId + '>');
   f.memberView.clear();
-  assert.equal(logChannelAllowsChatCopies(guild, logsChannel, { ...config, messageLogContent: false }), false);
+  assert.ok(logChannelChatCopyBlockReason(guild, logsChannel, { ...config, messageLogContent: false }));
 });
 
 test('Cherry Creek startup requires bot access to both channels and denies public staff requests', async () => {
