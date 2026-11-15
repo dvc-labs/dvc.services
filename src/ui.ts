@@ -163,14 +163,10 @@ export function aboutCard(config: Config, uptimeSeconds: number) {
 
 export function welcomeMessage(config: Config, userId: string) {
   return card(brandedTitle('Welcome to dvc.labs!', config.emoji),
-    'Hey ' + userMention(userId) + ", glad you're here! Make yourself at home among the projects, experiments, and people behind dvc.\n\n"
+    'Hey ' + userMention(userId) + ", glad you've joined! Come say hi in #yap and feel free to join our Minecraft, run `/cherrycreek` in Playground to get started.\n\n"
     + 'Start in ' + channelMention(config.verificationChannelId) + ': read the server rules, then press **Verify** to join the community.\n\n'
     + 'Curious about what we’re building? Follow **dvc.labs on GitHub** for our projects and updates.\n\n'
-    + 'A quick heads-up: the team logs membership, verification, voice-channel changes, and administrative activity. '
-    + 'Member profiles can be looked up publicly; live presence and moderation details are restricted to private staff views. '
-    + (config.messageLogContent ? 'When messages are edited or deleted, staff logs may include copies of their text. '
-      : 'Staff logs record when messages are edited or deleted. ')
-    + 'The bot does not read incoming DMs. See you in the server!', [], {
+    + 'See you in the server!', [], {
       buttons: [linkButton('Open dvc.labs', 'https://discord.com/channels/' + config.guildId + '/' + config.verificationChannelId, config.emoji),
         githubButton(config.emoji)],
     });

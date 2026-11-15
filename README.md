@@ -7,40 +7,6 @@ The Discord service bot for **dvc.labs** — a home for dvc. projects, experimen
 ![Node.js](https://img.shields.io/badge/Node.js-24_LTS-26bcc5)
 [![MIT](https://img.shields.io/badge/license-MIT-26bcc5)](LICENSE)
 
-## v0.2.5
-
-- Cherry Creek approvals have **Website**, **Player Guide**, and **Map** buttons with the Cherry Creek emoji. Staff requests show the complete Paper command in a separate code block.
-- Message edits and deletions are logged to the staff channel with text when available. Bulk deletions produce one summary card.
-- Discord AutoMod audit cards show the rule and outcome, including native caps rules. Discord owns enforcement and any notices.
-- Both welcome DM buttons use the dvc. emoji, and the welcome mentions edit and delete logging.
-
-## v0.2.4
-
-- One public verification panel. Newly verified members can choose **Yes** or **No** for announcement bulletins in their private confirmation, and change their choice later with **Bulletin preferences** on the panel. The bot removes its old standalone Bulletin card on upgrade.
-- `/ask prompt:…` opens a Hall conversation from a single command. Every Components V2 answer and continuation has an owner-only **Forget** button. With no answer card, use `/ask reset:true` without a prompt. The [CityMart Services](https://github.com/dvc-labs/CityMart-Services) integration keeps public and private conversation context separate.
-- Accepting a `/cherrycreek` request grants **Minecrafter** before sending the approval ping. A small SQLite database on persistent storage records approvals across restarts.
-- Logs show command timing, whitelist submission and decision outcomes, and changes to the Discord server's boost count and level.
-
-## v0.2.0
-
-- Teal **Components V2** cards with the dvc. application emoji, clear sections, links, and native member, channel, and role references. Verification logs read **Member verified → Result: Awarded**.
-- A welcome panel and **Verify** button that grants the configured access role with one click. No form or typed word is required. The old panel is upgraded in place, and restarts recognise its nested V2 button.
-- Private verification replies, duplicate-click protection, and checks for Discord membership screening.
-- Startup finds and refreshes the existing panel, including across older history pages. Verification access lives in Discord roles.
-- `/about` with bot information, version, uptime, links, and a hosting credit to [loon.host](https://loon.host).
-- `/verification` for team members with **Manage Server** to create or refresh the panel.
-- Public `/member user:@someone` for **all members**, with identity, join dates, verification, boost status, badges, roles, and profile images. **Staff details** opens an ephemeral view of permissions, hierarchy, screening/timeout status, and observed presence/devices/activities/voice; it requires Manage Server or Moderate Members.
-- Join/leave and member-update logs, native Discord audit entries with the actual actor, and voice-channel join/move/leave logs. Join logs use `<:dvc:1566457051465388194>`.
-- A friendly welcome DM for new human joins with a verification link, **Follow dvc.labs on GitHub** button, and a brief logging notice. Attempts start at least 1.5 seconds apart. Existing members are not contacted on startup; blocked DMs do not interrupt the bot.
-- Explicit Gateway intent selection for member, moderation, voice, and presence events. See the current Developer Portal settings below.
-- Structured logs for startup, command use/denials, verification, panel updates, reconnection, and shutdown. Cooldown, pagination, and reconnection diagnostics stay in the console to preserve space for useful Discord activity logs.
-- Actionable runtime setup errors in operator logs with generic private failure replies, command comparison that handles nested Discord options, a container version check derived from `package.json`, and configurable ID placeholders in `.env.example`.
-- Docker support with a non-root runtime, a 256 MB JavaScript heap limit, and small health endpoints.
-
-This is a lightweight access acknowledgement, **not a CAPTCHA or identity check**. A single button press does not reliably stop automated accounts. Use Discord's own moderation and raid protections as appropriate.
-
-The bot registers its own **guild commands** on startup, updating them only when definitions change. There is no separate registration command. Run one instance for this application/server.
-
 ## Commands and verification
 
 | Action | Who can use it | Where | Result |
@@ -55,58 +21,11 @@ The bot registers its own **guild commands** on startup, updating them only when
 | `/member user:@someone` | All members with access to application commands | `COMMANDS_CHANNEL_ID` | Public, paginated member information |
 | `/verification` | Members with **Manage Server** | `COMMANDS_CHANNEL_ID` | Creates or refreshes the verification panel; replies privately |
 
-The button works after process restarts without collectors or expiry timers. Startup refreshes the existing panel with the latest instructions, reusing the same button ID (`dvc:verify:v1`). Requests are restricted to the configured server, channel, and current bot-authored message. The bot fetches only the clicking member and checks their current roles. Members who hold `VERIFICATION_ROLE_ID` or `ADMIN_ROLE_ID` get a private acknowledgement and no role write. Members who need verification must complete any pending Discord screening first.
-
-Stop the old instance before upgrading. Forms opened on older releases are ignored; close the old form and press **Verify** again. The existing panel is converted to V2 with its legacy fields cleared. Discord does not allow reverting that message to legacy format, so rolling back to a pre-v0.2.0 build requires a new legacy panel.
-
-Role assignability is checked at startup and before each change. Use ordinary roles for verification and Bulletin, and place both below the bot's highest role. The bot rejects `@everyone`, integration-managed roles, and roles with administrative or moderation permissions. `ADMIN_ROLE_ID` must be a separate existing role. It can be above the bot because the bot only checks membership. Discord channel overrides and staff command permissions still apply independently.
-
-Before upgrading, check that **View Server Insights** is off on both self-assignable roles. If enabled on either role, startup names the role to fix. The bot's own role can keep the permission; boost logs do not require it.
-
-When verification awards the access role, the private confirmation asks **Would you like to receive announcement bulletins?** **Yes** grants the Bulletin role; **No** leaves roles as they are and points to **Bulletin preferences** on the same public panel. Existing members can open preferences directly. The controls show the current role and only their owner can act. Opting in requires verification or the configured admin role; a subscriber who loses access can still opt out. Role changes are limited to once every three seconds per member.
-
-The first v0.2.4 startup refreshes the same verification message and removes the bot's old standalone Bulletin card. Clearing `BULLETIN_ROLE_ID` and restarting hides the preference controls and private opt-in without stripping existing subscribers' roles.
-
-`/member` fetches only the selected member and their public user profile. Lookups are limited to once per user every **10 seconds**. Public profiles remain in the commands channel. Page changes use a stable **two-minute per-message snapshot**, are limited to once every **two seconds**, and **do not refetch member/profile data**. The snapshot cache holds at most 100 reports; expired/evicted reports ask for a new lookup. Lookups, page edits, and private detail requests share a token bucket with five initial operations, one refill every two seconds, and a two-operation concurrency cap. Private-detail requests share the two-second per-user page interval. Discord.js also handles Discord's REST rate limits.
-
-Only the original requester can turn a report's pages. Guild, channel, bot authorship, message/target binding, and ownership are checked on every click. Expired cards explicitly ask for a fresh `/member` lookup. Staff can open an ephemeral detail report from a public card; staff permissions are checked again on every private page click. Public snapshots never retain staff-only fields. A target missing from Discord's resolved member data is rejected privately before deferring or calling the API. Rare API failures or departure races use a non-empty temporary acknowledgement followed by a private error and placeholder removal. Member-controlled text neutralises links, Markdown/subtext, quotes, mentions, and bidi controls. Source text is truncated by Unicode code point before escaping, preserving complete emojis and escape sequences.
-
-Missing presence is shown as **not observed**, rather than inferred offline. Presence, devices, activities, voice state, effective permissions, and the bot's hierarchy capabilities appear only in the private staff view. Restricted voice-channel names/IDs remain omitted there too. Permissions are server-wide; channel overrides still apply. Email addresses, IPs, and MFA settings are not available through the lookup.
-
-In the Developer Portal, go to **Bot → Privileged Gateway Intents** and enable **Presence Intent**, **Server Members Intent**, and **Message Content Intent** before deploying v0.2.5. Set `MESSAGE_LOG_CONTENT=false` if you want only edit/delete metadata; in that mode the bot does not request Message Content. Intent hints are logged only for a DisallowedIntents error or close code 4014.
-
 The server permissions remain View Channels, Send Messages, Embed Links, Read Message History, Manage Roles, and View Audit Log (combined value `268520576`), with `bot` and `applications.commands` install scopes. There is no need to reinvite for this release. Give the bot View Channel in the rooms it should observe, and keep the moderation and logs channels private. AutoMod reporting uses View Audit Log. Boost count and level use Discord's [guild data](https://docs.discord.com/developers/resources/guild#guild-object).
 
 ## Environment variables
 
 Copy [`.env.example`](.env.example) for local or Docker Compose use. On your hosting service, enter the same values in its environment/secret settings. Never put the token in GitHub, a Dockerfile, an image build argument, or a public screenshot.
-
-| Variable | Required | Value / default | Purpose |
-| --- | --- | --- | --- |
-| `DISCORD_TOKEN` | Yes, secret | Obtain from Developer Portal → Bot | Raw bot token; no `Bot ` prefix |
-| `GUILD_ID` | Yes | Your server ID | dvc.labs server |
-| `APPLICATION_ID` | Yes | Your application ID | Discord application |
-| `VERIFICATION_ROLE_ID` | Yes | Your role ID | Ordinary member/access role |
-| `ADMIN_ROLE_ID` | No | Empty | Existing staff role that counts as access; never assigned by the bot |
-| `VERIFICATION_CHANNEL_ID` | Yes | Your channel ID | Welcome and verification text channel |
-| `COMMANDS_CHANNEL_ID` | Yes | Your channel ID | Slash-command text channel |
-| `LOGS_CHANNEL_ID` | Yes | Your channel ID | Private team logs text channel |
-| `MESSAGE_LOG_CONTENT` | No | `true` | Copy edit/delete text to staff cards; `false` logs metadata and works with Message Content disabled |
-| `VERIFICATION_MESSAGE_ID` | No | Empty | Select an existing bot-authored verification panel explicitly |
-| `BULLETIN_ROLE_ID` | No | Empty | Optional news-ping role managed from the verification channel |
-| `MOD_CHANNEL_ID` | For Cherry Creek only | Empty | Private staff channel for whitelist requests |
-| `MINECRAFT_CHANNEL_ID` | For Cherry Creek only | Empty | Minecraft channel for approval notices and `/cherrycreek` |
-| `MINECRAFTER_ROLE_ID` | For Cherry Creek only | Empty | Ordinary role awarded to approved applicants; keep it below the bot |
-| `DATA_DIR` | No | `./data` locally; `/data` in Docker | Writable persistent directory for the bot's SQLite state |
-| `WORKER_URL` | For Hall only | Empty | Hall v2 HTTPS origin, e.g. `https://hall.davevancauwenberghe.be` |
-| `HALLAI_API_KEY` | For Hall only, secret | Empty | Matches the Hall Worker's `DISCORD_API_KEY` |
-| `PORT` | No | `8080` | Internal health server, bound to `0.0.0.0`; use the host's assigned port if needed |
-| `LOG_LEVEL` | No | `info` | `debug`, `info`, `warn`, or `error`; filters console output only |
-| `DVC_EMOJI` | No | `<:dvc:1566457051465388194>` | Application-owned emoji for headings/buttons; use your test app's emoji or `none` to disable |
-| `CHERRY_CREEK_EMOJI` | No | `<:cherrycreek:1571632668104204318>` | Emoji on Cherry Creek approval links; a test app can use its own or `none` |
-| `NODE_ENV` | No | `production` in Docker | Standard Node environment; does not select another bot/server |
-| `TZ` | No | `Europe/Brussels` in Docker | Process timezone; structured log timestamps remain UTC |
-| `NODE_OPTIONS` | No | `--max-old-space-size=256` in Docker | Set the same value for a managed panel that runs the main file directly |
 
 The seven Discord connection variables must be supplied at runtime; replace the example's ID placeholders with your server's IDs. `DVC_EMOJI` is optional: unset or blank keeps the official dvc. branding, including when copying `.env.example`. Set it to `none` to disable branding, or to an application-owned emoji for a separate test app. SQLite runs in the Node process, so there is no separate database service to configure.
 
@@ -128,12 +47,6 @@ Use separate standard text channels. Allow the bot to view, send, read history, 
 2. Staff with **Manage Server** or **Moderate Members** can review it. To approve, copy the complete `whitelist add <username>` command from the card's code block into the Paper console and wait for confirmation, then click **Accept**.
 3. **Accept** checks that the applicant still has server access and that the bot can assign Minecrafter. It then saves the approval, grants Minecrafter, closes the staff card, and posts one approval mentioning only the applicant. It includes the Java address `play.cherrycreek.app` and buttons for the [website](https://cherrycreek.app/), [player guide](https://cherrycreek.app/guide), and [map](https://map.cherrycreek.app/). **Decline** closes the request without awarding a role or posting publicly. Previous approvals are unaffected.
 
-Each Discord member can have one pending request at a time. The bot checks its open moderation cards in Discord history before posting, so the limit survives restarts and still applies when a member enters a different Java username. It keeps a short cooldown to limit repeated checks. If the bot cannot finish checking history, it asks the member to try again without posting another card. Once a request is closed, the member can submit again after the cooldown.
-
-If the role grant fails, the staff card stays open and no announcement is sent. Fix the problem and click **Accept** to retry, or **Decline** to close the request if no grant was confirmed and Discord shows the applicant does not hold the saved role. If the applicant was already whitelisted in Paper and the request is declined, undo the whitelist change in Paper separately. The bot preserves confirmed approvals. If an approval notice cannot be confirmed after closing the card, check the Minecraft channel before notifying manually.
-
-The Java username stays on the private moderation message. Leave both channel variables blank to disable requests. A missing Minecrafter role setting or unavailable storage disables Cherry Creek with an operator warning in the console and logs channel; other features remain available.
-
 ## Persistent storage
 
 `DATA_DIR` contains `dvc-services.sqlite`. It holds panel upgrade markers and Cherry Creek approval metadata: Discord request, member, reviewer, role, timestamp, and announcement references. It does not contain Java usernames, Hall conversations, or credentials.
@@ -147,27 +60,11 @@ Keep the state directory private, back up the whole directory with the bot stopp
 
 Set `WORKER_URL` and `HALLAI_API_KEY` for the Hall Worker in the bot's **runtime** environment. The Worker keeps its `OPENAI_API_KEY`; dvc.services only needs the matching Discord integration secret. Both settings are needed for `/ask`. Leave both empty to disable Hall while keeping the rest of the bot available. A missing half of the configuration produces an operator warning without revealing credentials.
 
-Try `/ask prompt:What is dvc.labs?` in the commands channel. Set `private:true` to make the question, answer and continuation cards visible only to you in Discord. Ask follow-up questions in the same reply mode. Use **Forget** on any of your answer cards to clear the current context for that channel and visibility.
-
 If you no longer have the card, use `/ask reset:true private:true` to clear private context or `/ask reset:true` to clear public context. Omit the prompt. The bot confirms privately and sends no new question. Include a prompt alongside `reset:true` to start a new conversation. Existing Discord messages remain visible to their original audience.
-
-The bot sends the submitted question and the caller's guild, channel, user ID, and visibility to Hall. The Worker handles OpenAI, moderation, web search, and conversation memory. Context is scoped to those Discord identifiers and visibility, so two bots using the same Worker can share context for the same scope. The bot does not store a separate transcript. Console logs record command outcomes and safe diagnostics only. Discord reply privacy does not prevent processing by Hall or OpenAI; describe both providers and the Worker's retention in your published privacy notice before enabling the commands.
-
-Questions are limited to 1,000 characters. Members can ask once every 12 seconds and use **Forget** immediately after an answer, with a separate 12-second cooldown. At most two Hall requests can be in flight for the bot, with an 80-second timeout and no generation retries. Long answers use additional cards in the same reply mode, preserving complete source links that fit and continuing fenced code.
 
 ## Logs and data
 
 Message edit cards show the author when known, the source channel, a link, and **Before** and **After** text when available. A delete card includes the message ID and the last observed text. A deletion event doesn't tell the bot who removed the message; Discord's separate native audit entry can identify a moderator when present. Bulk deletions post one summary with up to two cached copies.
-
-Edits and deletes are limited to guild channels the bot can see. Known bot, webhook, and system messages, incoming DMs, and the logs channel and its threads are excluded. The bot keeps excerpts of up to 500 characters for the latest 1,000 observed messages in memory. Restart or cache eviction can leave old text unavailable; the card says so. Copies go to Discord staff logs only. The console keeps IDs and outcomes, and SQLite stores no chat text. Check that `LOGS_CHANNEL_ID` is staff-only, including its per-role and per-member overrides. The bot withholds copies if it detects access for `@everyone` or the configured verification, Bulletin, or Minecrafter roles. Explain text logging and retention in the server's privacy notice.
-
-AutoMod cards show the rule name, affected member and channel, and the action Discord recorded. Configure caps handling in Discord AutoMod; any corresponding audit entry appears without bot-side deletion, a second DM, or any extra permissions.
-
-Discord activity cards show member, channel, role, audit actor, and lookup target references without pinging them. Logs show command duration and subcommand, current server totals at startup, and before/after boost counts and levels when available. Cherry Creek audit entries identify the applicant, reviewer, decision, and linked staff card or approval. The hosting console keeps exact IDs in structured JSON. Discord resolves references according to the viewer's access; unavailable or deleted resources may not display a name. Audit entries also retain a recorded target name when Discord provides it.
-
-Cooldowns, denied member-card clicks, welcome DM results, and connection resumes are explicitly console-only. Discord audit delivery uses three explicit tiers: **critical** for failures/errors and lifecycle events, **important** for verification successes, and **routine** for other activity. At most 100 records wait; routine records are capped at 60, and routine plus success records at 80. This reserves capacity for successes over routine bursts and 20 slots for failures/lifecycle events over success bursts. Higher tiers are sent first and may evict lower tiers. Console copies are retained; saturation by critical events can still drop records. Locally authored setup errors retain corrective messages in operator logs; other errors expose safe names and numeric codes/statuses. Failure replies show generic private guidance.
-
-Unhandled promise rejections and uncaught exceptions deliberately shut the bot down with a nonzero exit code. Configure a host restart policy (Docker Compose uses `unless-stopped`). Expected interaction, audit-send, and connection errors are handled locally; an unhandled rejection indicates an uncontained failure that needs investigation.
 
 Verification state is the member's Discord role, and the panel lives in Discord message history. Welcome delivery uses a queue of 50 pending DMs, 1.5-second pacing, shutdown cancellation, and per-process join deduplication. A first member update without a cached prior state records current values explicitly as a snapshot. Native audit entries record actual administrative actions without guessing an actor for unrelated join/leave events. The bot's own verification, Bulletin, and Minecrafter role-change audit copies stay in the console to avoid duplicate Discord posts. Logs include identifiers, membership changes, and native audit reasons, so restrict access and choose retention appropriately. See [SECURITY.md](SECURITY.md).
 
