@@ -82,8 +82,18 @@ export function card(title: string, description = '', fields: readonly CardField
   return { flags: MessageFlags.IsComponentsV2 as const, components: [container], allowedMentions: NO_MENTIONS };
 }
 
-function githubButton(): ButtonBuilder {
-  return new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel('Follow dvc.labs on GitHub').setURL(GITHUB_URL);
+function withButtonEmoji(button: ButtonBuilder, emoji: string): ButtonBuilder {
+  const match = /^<(a?):([a-zA-Z0-9_]+):(\d+)>$/.exec(emoji);
+  if (match) button.setEmoji({ id: match[3]!, name: match[2]!, animated: match[1] === 'a' });
+  return button;
+}
+
+export function linkButton(label: string, url: string, emoji = ''): ButtonBuilder {
+  return withButtonEmoji(new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel(label).setURL(url), emoji);
+}
+
+function githubButton(emoji = ''): ButtonBuilder {
+  return linkButton('Follow dvc.labs on GitHub', GITHUB_URL, emoji);
 }
 
 function bulletinOpenButton(customId: string) {
@@ -91,9 +101,7 @@ function bulletinOpenButton(customId: string) {
 }
 
 export function verificationPanel(emoji = DVC_EMOJI, bulletinEnabled = false) {
-  const verify = new ButtonBuilder().setCustomId(VERIFY_CUSTOM_ID).setLabel('Verify').setStyle(ButtonStyle.Primary);
-  const match = /^<(a?):([a-zA-Z0-9_]+):(\d+)>$/.exec(emoji);
-  if (match) verify.setEmoji({ id: match[3]!, name: match[2]!, animated: match[1] === 'a' });
+  const verify = withButtonEmoji(new ButtonBuilder().setCustomId(VERIFY_CUSTOM_ID).setLabel('Verify').setStyle(ButtonStyle.Primary), emoji);
   return card(brandedTitle('Welcome to dvc.labs', emoji),
     'Read the server rules and complete any Discord screening, then press **Verify** to unlock dvc.labs.\n\n'
     + 'Already have access? You’re all set.'
@@ -160,8 +168,10 @@ export function welcomeMessage(config: Config, userId: string) {
     + 'Curious about what we’re building? Follow **dvc.labs on GitHub** for our projects and updates.\n\n'
     + 'A quick heads-up: the team logs membership, verification, voice-channel changes, and administrative activity. '
     + 'Member profiles can be looked up publicly; live presence and moderation details are restricted to private staff views. '
-    + 'Ordinary chat and incoming DMs are not archived. See you in the server!', [], {
-      buttons: [new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel('Open dvc.labs')
-        .setURL('https://discord.com/channels/' + config.guildId + '/' + config.verificationChannelId), githubButton()],
+    + (config.messageLogContent ? 'When messages are edited or deleted, staff logs may include copies of their text. '
+      : 'Staff logs record when messages are edited or deleted. ')
+    + 'The bot does not read incoming DMs. See you in the server!', [], {
+      buttons: [linkButton('Open dvc.labs', 'https://discord.com/channels/' + config.guildId + '/' + config.verificationChannelId, config.emoji),
+        githubButton(config.emoji)],
     });
 }

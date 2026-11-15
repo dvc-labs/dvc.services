@@ -9,14 +9,14 @@ import { AuditLog, type AuditEvent } from '../src/audit.js';
 import { CHERRY_MODAL_ID, CherryCreek } from '../src/cherry-creek.js';
 import { Logger } from '../src/logger.js';
 import { BotState, type CherryApprovalStore, type SavedCherryApproval } from '../src/state.js';
-import { messageText, testConfig, TEST_MINECRAFT_CHANNEL_ID as MINECRAFT, TEST_MOD_CHANNEL_ID as MOD } from './helpers.js';
+import { messageLinks, messageText, testConfig, TEST_MINECRAFT_CHANNEL_ID as MINECRAFT, TEST_MOD_CHANNEL_ID as MOD } from './helpers.js';
 
 const APPLICANT = '777777777777777777';
 const MODERATOR = '888888888888888888';
 const MESSAGE = '999999999999999991';
 const ANNOUNCEMENT = '999999999999999992';
 const MINECRAFTER_ROLE = '999999999999999993';
-const USERNAME = 'Cherry_Player';
+const USERNAME = 'Cherry_Player123';
 const BUTTON = 'dvc:cherry:v1:review:accepted:' + APPLICANT + ':' + USERNAME;
 type MessagePayload = { components: { toJSON(): unknown }[]; flags: number; allowedMentions?: unknown; nonce?: string; enforceNonce?: boolean };
 type StaffMessage = { id: string; author: { id: string }; components: MessagePayload['components'] };
@@ -160,7 +160,7 @@ test('the command opens a username-only modal, and a valid submission goes priva
   assert.deepEqual(receipt.replies[0], { flags: MessageFlags.Ephemeral });
   assert.match(messageText(receipt.replies[1]), /Request sent/);
   assert.equal(f.modPosts[0]!.flags, MessageFlags.IsComponentsV2);
-  assert.match(messageText(f.modPosts[0]), /whitelist add Cherry_Player/);
+  assert.ok(messageText(f.modPosts[0]).includes('```text\nwhitelist add ' + USERNAME + '\n```'));
   assert.ok(JSON.stringify(f.modPosts[0]).includes(BUTTON));
   assert.deepEqual(f.modPosts[0]!.allowedMentions, { parse: [], repliedUser: false });
   assert.equal(f.modPosts[0]!.enforceNonce, true);
@@ -280,7 +280,12 @@ test('accept saves and closes the request before pinging only the applicant with
   assert.deepEqual(f.announcements[0]!.allowedMentions, { parse: [], users: [APPLICANT], repliedUser: false });
   assert.ok(messageText(f.announcements[0]).includes('<@' + APPLICANT + '>'));
   assert.match(messageText(f.announcements[0]), /play\.cherrycreek\.app/);
-  assert.ok(JSON.stringify(f.announcements[0]).includes('https://cherrycreek.app/'));
+  const emojiId = '1571632668104204318';
+  assert.deepEqual(messageLinks(f.announcements[0]), [
+    { label: 'Website', url: 'https://cherrycreek.app/', emojiId },
+    { label: 'Player Guide', url: 'https://cherrycreek.app/guide', emojiId },
+    { label: 'Map', url: 'https://map.cherrycreek.app/', emojiId },
+  ]);
   assert.ok(!JSON.stringify(f.announcements[0]).includes(USERNAME));
   assert.match(messageText(f.edits[1]), /View approval/);
   assert.deepEqual(f.auditEvents.map(e => e.event), ['cherry_request_submitted', 'cherry_request_reviewed', 'cherry_notice_sent']);

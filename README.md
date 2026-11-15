@@ -3,9 +3,16 @@
 The Discord service bot for **dvc.labs** — a home for dvc. projects, experiments, and a look behind the scenes.
 
 [![CI](https://github.com/dvc-labs/dvc.services/actions/workflows/ci.yml/badge.svg)](https://github.com/dvc-labs/dvc.services/actions/workflows/ci.yml)
-![Version](https://img.shields.io/badge/version-0.2.4-26bcc5)
+![Version](https://img.shields.io/badge/version-0.2.5-26bcc5)
 ![Node.js](https://img.shields.io/badge/Node.js-24_LTS-26bcc5)
 [![MIT](https://img.shields.io/badge/license-MIT-26bcc5)](LICENSE)
+
+## v0.2.5
+
+- Cherry Creek approvals have **Website**, **Player Guide**, and **Map** buttons with the Cherry Creek emoji. Staff requests show the complete Paper command in a separate code block.
+- Message edits and deletions are logged to the staff channel with text when available. Bulk deletions produce one summary card.
+- Discord AutoMod audit cards show the rule and outcome, including native caps rules. Discord owns enforcement and any notices.
+- Both welcome DM buttons use the dvc. emoji, and the welcome mentions edit and delete logging.
 
 ## v0.2.4
 
@@ -25,7 +32,7 @@ The Discord service bot for **dvc.labs** — a home for dvc. projects, experimen
 - Public `/member user:@someone` for **all members**, with identity, join dates, verification, boost status, badges, roles, and profile images. **Staff details** opens an ephemeral view of permissions, hierarchy, screening/timeout status, and observed presence/devices/activities/voice; it requires Manage Server or Moderate Members.
 - Join/leave and member-update logs, native Discord audit entries with the actual actor, and voice-channel join/move/leave logs. Join logs use `<:dvc:1566457051465388194>`.
 - A friendly welcome DM for new human joins with a verification link, **Follow dvc.labs on GitHub** button, and a brief logging notice. Attempts start at least 1.5 seconds apart. Existing members are not contacted on startup; blocked DMs do not interrupt the bot.
-- Five explicitly selected Gateway intents: Guilds, Guild Members, Guild Moderation, Guild Voice States, and Guild Presences (bitfield **391**). Enable **Server Members** and **Presence** in the Portal; Message Content is not requested.
+- Explicit Gateway intent selection for member, moderation, voice, and presence events. See the current Developer Portal settings below.
 - Structured logs for startup, command use/denials, verification, panel updates, reconnection, and shutdown. Cooldown, pagination, and reconnection diagnostics stay in the console to preserve space for useful Discord activity logs.
 - Actionable runtime setup errors in operator logs with generic private failure replies, command comparison that handles nested Discord options, a container version check derived from `package.json`, and configurable ID placeholders in `.env.example`.
 - Docker support with a non-root runtime, a 256 MB JavaScript heap limit, and small health endpoints.
@@ -66,7 +73,9 @@ Only the original requester can turn a report's pages. Guild, channel, bot autho
 
 Missing presence is shown as **not observed**, rather than inferred offline. Presence, devices, activities, voice state, effective permissions, and the bot's hierarchy capabilities appear only in the private staff view. Restricted voice-channel names/IDs remain omitted there too. Permissions are server-wide; channel overrides still apply. Email addresses, IPs, and MFA settings are not available through the lookup.
 
-The bot requires **Presence** and **Server Members** intents in the Developer Portal. **Message Content can remain disabled.** Intent hints are logged only for a DisallowedIntents error or close code 4014. Its server permissions are View Channels, Send Messages, Embed Links, Read Message History, Manage Roles, and View Audit Log (combined value `268520576`). The install scopes remain `bot` and `applications.commands`. Give the bot channel access to the two Cherry Creek destinations if enabled. Keep moderation and logs private. Boost count and level are reported using Discord's [guild data](https://docs.discord.com/developers/resources/guild#guild-object), without requiring Server Insights or calling dashboard endpoints.
+In the Developer Portal, go to **Bot → Privileged Gateway Intents** and enable **Presence Intent**, **Server Members Intent**, and **Message Content Intent** before deploying v0.2.5. Set `MESSAGE_LOG_CONTENT=false` if you want only edit/delete metadata; in that mode the bot does not request Message Content. Intent hints are logged only for a DisallowedIntents error or close code 4014.
+
+The server permissions remain View Channels, Send Messages, Embed Links, Read Message History, Manage Roles, and View Audit Log (combined value `268520576`), with `bot` and `applications.commands` install scopes. There is no need to reinvite for this release. Give the bot View Channel in the rooms it should observe, and keep the moderation and logs channels private. AutoMod reporting uses View Audit Log. Boost count and level use Discord's [guild data](https://docs.discord.com/developers/resources/guild#guild-object).
 
 ## Environment variables
 
@@ -81,7 +90,8 @@ Copy [`.env.example`](.env.example) for local or Docker Compose use. On your hos
 | `ADMIN_ROLE_ID` | No | Empty | Existing staff role that counts as access; never assigned by the bot |
 | `VERIFICATION_CHANNEL_ID` | Yes | Your channel ID | Welcome and verification text channel |
 | `COMMANDS_CHANNEL_ID` | Yes | Your channel ID | Slash-command text channel |
-| `LOGS_CHANNEL_ID` | Yes | Your channel ID | Preferably private team logs text channel |
+| `LOGS_CHANNEL_ID` | Yes | Your channel ID | Private team logs text channel |
+| `MESSAGE_LOG_CONTENT` | No | `true` | Copy edit/delete text to staff cards; `false` logs metadata and works with Message Content disabled |
 | `VERIFICATION_MESSAGE_ID` | No | Empty | Select an existing bot-authored verification panel explicitly |
 | `BULLETIN_ROLE_ID` | No | Empty | Optional news-ping role managed from the verification channel |
 | `MOD_CHANNEL_ID` | For Cherry Creek only | Empty | Private staff channel for whitelist requests |
@@ -93,6 +103,7 @@ Copy [`.env.example`](.env.example) for local or Docker Compose use. On your hos
 | `PORT` | No | `8080` | Internal health server, bound to `0.0.0.0`; use the host's assigned port if needed |
 | `LOG_LEVEL` | No | `info` | `debug`, `info`, `warn`, or `error`; filters console output only |
 | `DVC_EMOJI` | No | `<:dvc:1566457051465388194>` | Application-owned emoji for headings/buttons; use your test app's emoji or `none` to disable |
+| `CHERRY_CREEK_EMOJI` | No | `<:cherrycreek:1571632668104204318>` | Emoji on Cherry Creek approval links; a test app can use its own or `none` |
 | `NODE_ENV` | No | `production` in Docker | Standard Node environment; does not select another bot/server |
 | `TZ` | No | `Europe/Brussels` in Docker | Process timezone; structured log timestamps remain UTC |
 | `NODE_OPTIONS` | No | `--max-old-space-size=256` in Docker | Set the same value for a managed panel that runs the main file directly |
@@ -114,8 +125,8 @@ MINECRAFTER_ROLE_ID=YOUR_MINECRAFTER_ROLE_ID
 Use separate standard text channels. Allow the bot to view, send, read history, and embed links in both channels; keep the moderation channel visible only to staff and the bot. Use an ordinary Minecrafter role below the bot's highest role, without access to the moderation channel. Applicants need Use Application Commands in the Minecraft or commands channel and must be able to read the Minecraft channel to see an approval. The existing app scopes and **Manage Roles** permission cover the role grant.
 
 1. A verified member runs `/cherrycreek` and submits their Java username. The bot validates the name, sends the request to staff, and confirms submission privately.
-2. Staff with **Manage Server** or **Moderate Members** can review it. To approve, run the card's `whitelist add <username>` command in the Paper console and wait for confirmation, then click **Accept**. This bot does not connect to Paper.
-3. **Accept** checks that the applicant still has server access and that the bot can assign Minecrafter. It then saves the approval, grants Minecrafter, closes the staff card, and posts one approval mentioning only the applicant. It includes the Java address `play.cherrycreek.app` and a [Cherry Creek website](https://cherrycreek.app/) link. **Decline** closes the request without awarding a role or posting publicly. Previous approvals are unaffected.
+2. Staff with **Manage Server** or **Moderate Members** can review it. To approve, copy the complete `whitelist add <username>` command from the card's code block into the Paper console and wait for confirmation, then click **Accept**.
+3. **Accept** checks that the applicant still has server access and that the bot can assign Minecrafter. It then saves the approval, grants Minecrafter, closes the staff card, and posts one approval mentioning only the applicant. It includes the Java address `play.cherrycreek.app` and buttons for the [website](https://cherrycreek.app/), [player guide](https://cherrycreek.app/guide), and [map](https://map.cherrycreek.app/). **Decline** closes the request without awarding a role or posting publicly. Previous approvals are unaffected.
 
 Each Discord member can have one pending request at a time. The bot checks its open moderation cards in Discord history before posting, so the limit survives restarts and still applies when a member enters a different Java username. It keeps a short cooldown to limit repeated checks. If the bot cannot finish checking history, it asks the member to try again without posting another card. Once a request is closed, the member can submit again after the cooldown.
 
@@ -145,6 +156,12 @@ The bot sends the submitted question and the caller's guild, channel, user ID, a
 Questions are limited to 1,000 characters. Members can ask once every 12 seconds and use **Forget** immediately after an answer, with a separate 12-second cooldown. At most two Hall requests can be in flight for the bot, with an 80-second timeout and no generation retries. Long answers use additional cards in the same reply mode, preserving complete source links that fit and continuing fenced code.
 
 ## Logs and data
+
+Message edit cards show the author when known, the source channel, a link, and **Before** and **After** text when available. A delete card includes the message ID and the last observed text. A deletion event doesn't tell the bot who removed the message; Discord's separate native audit entry can identify a moderator when present. Bulk deletions post one summary with up to two cached copies.
+
+Edits and deletes are limited to guild channels the bot can see. Known bot, webhook, and system messages, incoming DMs, and the logs channel and its threads are excluded. The bot keeps excerpts of up to 500 characters for the latest 1,000 observed messages in memory. Restart or cache eviction can leave old text unavailable; the card says so. Copies go to Discord staff logs only. The console keeps IDs and outcomes, and SQLite stores no chat text. Check that `LOGS_CHANNEL_ID` is staff-only, including its per-role and per-member overrides. The bot withholds copies if it detects access for `@everyone` or the configured verification, Bulletin, or Minecrafter roles. Explain text logging and retention in the server's privacy notice.
+
+AutoMod cards show the rule name, affected member and channel, and the action Discord recorded. Configure caps handling in Discord AutoMod; any corresponding audit entry appears without bot-side deletion, a second DM, or any extra permissions.
 
 Discord activity cards show member, channel, role, audit actor, and lookup target references without pinging them. Logs show command duration and subcommand, current server totals at startup, and before/after boost counts and levels when available. Cherry Creek audit entries identify the applicant, reviewer, decision, and linked staff card or approval. The hosting console keeps exact IDs in structured JSON. Discord resolves references according to the viewer's access; unavailable or deleted resources may not display a name. Audit entries also retain a recorded target name when Discord provides it.
 

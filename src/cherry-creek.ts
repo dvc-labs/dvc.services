@@ -9,14 +9,18 @@ import { SetupError } from './errors.js';
 import { errorSummary } from './logger.js';
 import { Cooldown, hasEnabledButton, hasMatchingButton, serverAccessRole } from './policy.js';
 import type { CherryApproval, CherryApprovalStore } from './state.js';
-import { card, discordTime } from './ui.js';
+import { card, discordTime, linkButton } from './ui.js';
 
 export const CHERRY_MODAL_ID = 'dvc:cherry:v1:request';
 export const CHERRY_REVIEW_PREFIX = 'dvc:cherry:v1:review:';
 const USERNAME_FIELD = 'java_username';
 const JAVA_USERNAME = /^[A-Za-z0-9_]{3,16}$/;
 const SERVER = 'play.cherrycreek.app';
-const WEBSITE = 'https://cherrycreek.app/';
+const CHERRY_LINKS = [
+  ['Website', 'https://cherrycreek.app/'],
+  ['Player Guide', 'https://cherrycreek.app/guide'],
+  ['Map', 'https://map.cherrycreek.app/'],
+] as const;
 const CHERRY_COLOR = 0xffb7c5;
 const HISTORY_PAGE_SIZE = 100;
 const HISTORY_CHECK_BUDGET_MS = 20_000;
@@ -44,28 +48,28 @@ function parseReview(customId: string): (CherryRequest & { decision: Decision })
 function requestCard(request: CherryRequest, review?: Review) {
   const code = (value: string) => '`' + value + '`';
   return card('Cherry Creek · Whitelist request',
-    review ? 'This request has been reviewed.' : 'If accepting, first add the Java account in the Paper console. Click **Accept** only after the console confirms it.', [
+    review ? 'This request has been reviewed.'
+      : 'Run this in the Paper console, then click **Accept** once Paper confirms the whitelist change.\n\n'
+        + '**Paper console**\n```text\nwhitelist add ' + request.username + '\n```', [
       { name: 'Applicant', value: userMention(request.applicantId) },
       { name: 'Java username', value: code(request.username) },
       { name: 'Status', value: review ? review.decision === 'accepted' ? 'Accepted' : 'Declined' : 'Awaiting review' },
       ...(review ? [
         { name: 'Reviewed by', value: userMention(review.moderatorId) + ' · ' + discordTime(review.at) },
         ...(review.notification ? [{ name: 'Minecraft notification', value: review.notification }] : []),
-      ] : [{ name: 'Paper console', value: code('whitelist add ' + request.username) }]),
+      ] : []),
     ], { accentColor: CHERRY_COLOR, ...(review ? {} : { buttons: [
       new ButtonBuilder().setCustomId(reviewId(request, 'accepted')).setLabel('Accept').setStyle(ButtonStyle.Success),
       new ButtonBuilder().setCustomId(reviewId(request, 'declined')).setLabel('Decline').setStyle(ButtonStyle.Danger),
     ] }) });
 }
 
-function approvalCard(applicantId: string) {
+function approvalCard(applicantId: string, emoji: string) {
   return {
     ...card('Welcome to Cherry Creek!',
       userMention(applicantId) + ', your Minecraft Java account has been whitelisted. Add the server in **Multiplayer** and come say hi!', [
         { name: 'Java server address', value: '`' + SERVER + '`' },
-      ], { accentColor: CHERRY_COLOR, buttons: [
-        new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel('Cherry Creek website').setURL(WEBSITE),
-      ] }),
+      ], { accentColor: CHERRY_COLOR, buttons: CHERRY_LINKS.map(([label, url]) => linkButton(label, url, emoji)) }),
     allowedMentions: { parse: [], users: [applicantId], repliedUser: false },
   } as const;
 }
@@ -305,7 +309,7 @@ export class CherryCreek {
       let announcementId: string;
       try {
         const announcement = await this.minecraft.send({
-          ...approvalCard(action.applicantId), nonce: 'cca' + messageId, enforceNonce: true,
+          ...approvalCard(action.applicantId, this.config.cherryCreekEmoji), nonce: 'cca' + messageId, enforceNonce: true,
         });
         announcementId = announcement.id;
       } catch (error) {

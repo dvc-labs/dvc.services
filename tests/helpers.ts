@@ -1,5 +1,6 @@
 import type { Config } from '../src/config.js';
-import { DVC_EMOJI } from '../src/version.js';
+import { ButtonStyle, ComponentType, type APIContainerComponent } from 'discord.js';
+import { CHERRY_CREEK_EMOJI, DVC_EMOJI } from '../src/version.js';
 
 export const TEST_MOD_CHANNEL_ID = '777777777777777778';
 export const TEST_MINECRAFT_CHANNEL_ID = '777777777777777779';
@@ -17,12 +18,22 @@ export function messageText(payload: unknown): string {
   return walk(data).join('\n');
 }
 
+export function messageLinks(payload: unknown) {
+  const data = JSON.parse(JSON.stringify(payload)) as { components: APIContainerComponent[] };
+  return data.components.flatMap(container => container.components.flatMap(component =>
+    component.type === ComponentType.ActionRow
+      ? component.components.flatMap(button => button.type === ComponentType.Button && button.style === ButtonStyle.Link
+        ? [{ label: button.label, url: button.url, emojiId: button.emoji?.id }] : [])
+      : []));
+}
+
 export function testConfig(): Config {
   return { token: 'test-token', guildId: '111111111111111111', applicationId: '222222222222222222',
     verificationRoleId: '333333333333333333', adminRoleId: undefined, verificationChannelId: '444444444444444444',
     commandsChannelId: '555555555555555555', logsChannelId: '666666666666666666',
+    messageLogContent: true,
     verificationMessageId: undefined, bulletinRoleId: undefined, modChannelId: undefined, minecraftChannelId: undefined,
     minecrafterRoleId: undefined, dataDir: '/unused/test/data',
     hallWorkerUrl: undefined, hallApiKey: undefined,
-    port: 8080, logLevel: 'error', emoji: DVC_EMOJI };
+    port: 8080, logLevel: 'error', emoji: DVC_EMOJI, cherryCreekEmoji: CHERRY_CREEK_EMOJI };
 }

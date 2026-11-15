@@ -148,6 +148,12 @@ export function discordPanelRepository(channel: TextChannel, config: Pick<Config
   };
 }
 
+export function logChannelAllowsChatCopies(guild: Guild, channel: TextChannel, config: Config): boolean {
+  const ordinaryRoles = [guild.roles.everyone, ...[config.verificationRoleId, config.bulletinRoleId, config.minecrafterRoleId]
+    .flatMap(id => id ? guild.roles.cache.get(id) ?? [] : [])];
+  return config.messageLogContent && !ordinaryRoles.some(role => channel.permissionsFor(role).has(PermissionFlagsBits.ViewChannel));
+}
+
 export async function preflight(client: Client<true>, config: Config) {
   if (client.application.id !== config.applicationId) {
     throw new SetupError('APPLICATION_ID does not match DISCORD_TOKEN.');

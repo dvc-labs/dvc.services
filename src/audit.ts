@@ -14,6 +14,8 @@ export interface AuditEvent {
   actorId?: string;
   targetUserId?: string;
   fields?: CardField[];
+  // Message copies go only to the private Discord sink, never to console JSON.
+  discordFields?: CardField[];
   detail?: string;
   // Defaults to true; false retains the console copy without queueing a Discord post.
   discord?: boolean;
@@ -24,7 +26,7 @@ export interface AuditEvent {
 export type AuditSink = (event: AuditEvent) => Promise<void>;
 const priorityRank = (event: AuditEvent): number => event.priority === 'critical' ? 2 : event.priority === 'important' ? 1 : 0;
 
-export function discordAuditSink(channel: TextChannel): AuditSink {
+export function discordAuditSink(channel: TextChannel, canCopyChat = () => false): AuditSink {
   return async event => {
     const fields = [{ name: 'Result', value: humanise(event.outcome) }];
     if (event.userId) fields.push({ name: 'Member', value: userMention(event.userId) });
@@ -35,6 +37,10 @@ export function discordAuditSink(channel: TextChannel): AuditSink {
     if (event.actorId) fields.push({ name: 'Performed by', value: userMention(event.actorId) });
     if (event.targetUserId) fields.push({ name: 'Target member', value: userMention(event.targetUserId) });
     if (event.fields) fields.push(...event.fields);
+    if (event.discordFields?.length) {
+      if (canCopyChat()) fields.push(...event.discordFields);
+      else fields.push({ name: 'Message text', value: 'Hidden because the logs channel is visible to ordinary members.' });
+    }
     await channel.send(card(event.title, event.detail, fields,
       { footer: `<t:${Math.floor(Date.now() / 1_000)}:f>` }));
   };
